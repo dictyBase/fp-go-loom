@@ -14,7 +14,13 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Packages](#packages)
-- [Quick Start](#quick-start)
+- [Usage](#usage)
+  - [Arrays](#arrays)
+  - [Strings](#strings)
+  - [Either & error handling](#either--error-handling)
+  - [IOEither bridge](#ioeither-bridge)
+  - [Option pattern matching](#option-pattern-matching)
+  - [Predicates](#predicates)
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [License](#license)
@@ -33,44 +39,181 @@ go get github.com/dictyBase/fp-go-loom
 
 ## Packages
 
-| Package | Purpose |
+| Package | Exports |
 |---|---|
-| `array` | `Compact` (catMaybes), `ParseWith` (filterMap parse) |
-| `either/parse` | `ParseInt` → `Either[error, int]` |
-| `eithererr` | `ConstErr` (stable sentinel error factory) |
-| `ioeitherutils` | `ToEither` (lazy IOEither → eager Either) |
-| `matchopt` | Option-based pattern-match arms |
-| `predicate/ord` | Reusable ord/eq instances + derived predicates |
-| `predicate/array` | Slice-length predicates |
-| `predicate/bytes` | `[]byte` length predicates |
-| `predicate/strings` | String predicates from curried stdlib |
-| `strutils` | `JoinStrings` via string monoid fold |
+| `array` | `Compact`, `ParseWith` |
+| `either/parse` | `ParseInt` |
+| `eithererr` | `ConstErr` |
+| `ioeitherutils` | `ToEither` |
+| `matchopt` | `Case`, `Const`, `Default`, `Alt`, `First` |
+| `predicate/ord` | `IntOrd`, `Float64Ord`, `IntEq`, `Float64Eq`, `StringEq`, `IntBetween`, `IntBetweenInclusive`, `MinStrLen`, `MaxStrLen`, `StrLenEq`, `NotEqualF64`, `NotEqualInt`, `NotEqualStr`, `StrEq` |
+| `predicate/array` | `IsNonEmpty`, `MinLen`, `MaxLen`, `LenEq` |
+| `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
+| `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
+| `strutils` | `JoinStrings` |
 
-## Quick Start
+> **Note:** package names may differ from the import path's last segment
+> (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
+> as shown in the examples below.
+
+## Usage
+
+Each snippet shows the package import and a representative call; outputs
+are shown in comments. Full signatures live on
+[pkg.go.dev](https://pkg.go.dev/github.com/dictyBase/fp-go-loom).
+
+### Arrays
 
 ```go
-package main
-
 import (
-    "fmt"
+    "strconv"
 
-    "github.com/dictyBase/fp-go-loom/array"
-    predord "github.com/dictyBase/fp-go-loom/predicate/ord"
     O "github.com/IBM/fp-go/v2/option"
+    arrutils "github.com/dictyBase/fp-go-loom/array"
 )
 
-func main() {
-    // Predicate: is the string at least 3 chars?
-    fmt.Println(predord.MinStrLen(3)("hello")) // true
-
-    // Compact: drop None, keep Some values
-    opts := []O.Option[string]{
-        O.Some("a"),
-        O.None[string](),
-        O.Some("b"),
-    }
-    fmt.Println(array.Compact[string](opts)) // [a b]
+// Compact: drop None, keep Some values (catMaybes)
+opts := []O.Option[string]{
+    O.Some("a"), O.None[string](), O.Some("b"),
 }
+arrutils.Compact[string](opts) // []string{"a", "b"}
+
+// ParseWith: map []string to []A, silently discarding parse errors
+parseInts := arrutils.ParseWith(strconv.Atoi)
+parseInts([]string{"1", "bad", "42", "x", "7"}) // []int{1, 42, 7}
+```
+
+### Strings
+
+```go
+import "github.com/dictyBase/fp-go-loom/strutils"
+
+strutils.JoinStrings("a", "b", "c") // "abc"
+strutils.JoinStrings()             // ""
+```
+
+### Either & error handling
+
+```go
+import (
+    E "github.com/IBM/fp-go/v2/either"
+
+    eitherparse "github.com/dictyBase/fp-go-loom/either/parse"
+    eithererr "github.com/dictyBase/fp-go-loom/eithererr"
+)
+
+// ParseInt: string -> Either[error, int]
+eitherparse.ParseInt("42")  // Right[error, int](42)
+eitherparse.ParseInt("abc") // Left[error, int]("failed to parse int: ...")
+E.IsRight(eitherparse.ParseInt("42")) // true
+
+// ConstErr: stable sentinel error factory. The same errors.New instance is
+// returned on every call, so errors.Is stays stable across invocations.
+fn := eithererr.ConstErr[string]("invalid")
+fn("anything") // error("invalid")
+fn("a") == fn("b") // true — identical instance
+```
+
+### IOEither bridge
+
+```go
+import (
+    IOE "github.com/IBM/fp-go/v2/ioeither"
+
+    ioeutils "github.com/dictyBase/fp-go-loom/ioeitherutils"
+)
+
+// ToEither: force a lazy IOEither into an eager Either
+ioe := IOE.Right[error, int](42)
+ioeutils.ToEither[error, int](ioe) // Right[error, int](42)
+```
+
+### Option pattern matching
+
+```go
+import (
+    O "github.com/IBM/fp-go/v2/option"
+
+    MO "github.com/dictyBase/fp-go-loom/matchopt"
+)
+
+// Build pattern-match arms over Option
+armNeg := MO.Const(func(n int) bool { return n < 0 }, "neg")
+armZero := MO.Const(func(n int) bool { return n == 0 }, "zero")
+armPos := MO.Default(func(n int) string { return "pos" })
+
+classify := func(n int) string {
+    arms := []O.Option[string]{armNeg(n), armZero(n), armPos(n)}
+    return MO.First("unknown", arms)
+}
+classify(-5) // "neg"
+classify(0)  // "zero"
+classify(7)  // "pos"
+
+// Alt: first Some wins, or None
+MO.Alt([]O.Option[int]{
+    O.None[int](), O.Some(1), O.Some(2),
+}) // Some(1)
+```
+
+### Predicates
+
+Ord/eq instances and derived predicates (`predicate/ord`):
+
+```go
+import predord "github.com/dictyBase/fp-go-loom/predicate/ord"
+
+predord.MinStrLen(3)("hello")            // true — len(s) >= 3
+predord.MaxStrLen(5)("hello")            // true — len(s) <= 5
+predord.StrLenEq(3)("hey")               // true — len(s) == 3
+predord.IntBetween(1, 10)(5)             // true — 1 <= x < 10 (exclusive)
+predord.IntBetween(1, 10)(10)            // false
+predord.IntBetweenInclusive(1, 10)(10)  // true — inclusive upper
+predord.NotEqualInt(5)(6)                // true — x != v
+predord.StrEq("go")("go")                // true — x == s
+
+// Base instances to pass into fp-go combinators:
+//   predord.IntOrd, predord.Float64Ord,
+//   predord.IntEq, predord.Float64Eq, predord.StringEq
+```
+
+Slice-length predicates (`predicate/array`):
+
+```go
+import predarrays "github.com/dictyBase/fp-go-loom/predicate/array"
+
+predarrays.IsNonEmpty[int]()([]int{1})                  // true — len > 0
+predarrays.IsNonEmpty[int]()([]int{})                    // false
+predarrays.MinLen[string](3)([]string{"a", "b", "c"})    // true — len >= 3
+predarrays.MaxLen[string](3)([]string{"a", "b"})         // true — len <= 3
+predarrays.LenEq[int](2)([]int{1, 2})                    // true — len == 2
+```
+
+Byte predicates (`predicate/bytes`):
+
+```go
+import predbytes "github.com/dictyBase/fp-go-loom/predicate/bytes"
+
+predbytes.HasPositiveLen([]byte("data")) // true — len > 0
+predbytes.HasPositiveLen([]byte{})       // false
+predbytes.HasPositiveLen(nil)            // false
+predbytes.IsNonEmpty([]byte("x"))        // true — alias for HasPositiveLen
+```
+
+String predicates from curried stdlib (`predicate/strings`):
+
+```go
+import (
+    "unicode"
+
+    predstrings "github.com/dictyBase/fp-go-loom/predicate/strings"
+)
+
+predstrings.LastIndexOf("@")("foo@bar")                 // 3
+predstrings.HasSuffix(".go")("hello.go")               // true
+predstrings.ContainsRuneClass(unicode.IsUpper)("Hello") // true
+predstrings.HasAtSign("user@example.com")               // true
+predstrings.StrLenBetween(3, 5)("hello")                // true — inclusive
 ```
 
 ## Project Structure
