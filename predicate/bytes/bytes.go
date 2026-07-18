@@ -9,9 +9,8 @@ import (
 )
 
 var (
-
-	// HasPositiveLen composes ByteSize with IsPositiveLen via ContraMap,
-	// producing a Predicate[[]byte].
+	// HasPositiveLen returns a Predicate that is true when len(b) > 0,
+	// composing ByteSize with MoreThan(0) via ContraMap.
 	HasPositiveLen = Pred.ContraMap(B.Size)(N.MoreThan(0))
 
 	// IsNonEmpty is a human-readable alias for HasPositiveLen.

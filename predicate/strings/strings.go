@@ -12,18 +12,20 @@ import (
 	predord "github.com/dictyBase/fp-go-loom/predicate/ord"
 )
 
-// Curried stdlib string wrappers and derived predicates.
 var (
-	// LastIndexOf(substr)(s) → index of last occurrence of substr in s (-1 if absent)
+	// LastIndexOf returns a function that reports the index of the
+	// last occurrence of substr in s (-1 if absent).
 	LastIndexOf = F.Bind2of2(strings.LastIndex)
 
-	// HasSuffix(suffix)(s) → whether s ends with suffix
+	// HasSuffix returns a function that reports whether s ends with suffix.
 	HasSuffix = F.Bind2of2(strings.HasSuffix)
 
-	// ContainsRuneClass(pred)(s) → whether s contains any rune satisfying pred
+	// ContainsRuneClass returns a function that reports whether s
+	// contains any rune satisfying pred.
 	ContainsRuneClass = F.Bind2of2(strings.ContainsFunc)
 
-	// HasAtSign returns true when "@" exists anywhere in the string (last index >= 0)
+	// HasAtSign returns true when "@" exists anywhere in the string
+	// (last index >= 0).
 	HasAtSign = F.Pipe2(
 		0,
 		ORD.Geq(predord.IntOrd),
@@ -31,7 +33,8 @@ var (
 	)
 )
 
-// StrLenBetween whether len(s) is between first and second (inclusive)
+// StrLenBetween returns a Predicate that is true when len(s) is
+// between first and second (inclusive).
 func StrLenBetween(first, second int) Pred.Predicate[string] {
 	return Pred.ContraMap(
 		Str.Size,
