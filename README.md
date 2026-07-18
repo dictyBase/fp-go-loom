@@ -1,8 +1,7 @@
 # fp-go-loom
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/dictyBase/fp-go-loom.svg)](https://pkg.go.dev/github.com/dictyBase/fp-go-loom)
-[![Go Report Card](https://goreportcard.com/badge/github.com/dictyBase/fp-go-loom)](https://goreportcard.com/report/github.com/dictyBase/fp-go-loom)
-[![CI/CD](https://github.com/dictyBase/fp-go-loom/actions/workflows/ci.yml/badge.svg)](https://github.com/dictyBase/fp-go-loom/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/dictyBase/fp-go-loom/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/dictyBase/fp-go-loom/actions/workflows/ci.yml?branch=develop)
 [![License](https://img.shields.io/badge/License-BSD%202--Clause-blue.svg)](LICENSE)
 
 Reusable [fp-go v2](https://github.com/IBM/fp-go) combinators — predicates,
