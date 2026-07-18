@@ -16,5 +16,5 @@ coverage.txt
 # OS
 .DS_Store
 
-# pi/session artifacts
-*.jsonl
+# pi/session artifact (repo-root only)
+/fp-go-loom.jsonl
