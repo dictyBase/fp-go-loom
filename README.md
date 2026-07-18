@@ -21,6 +21,11 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
   - [IOEither bridge](#ioeither-bridge)
   - [Option pattern matching](#option-pattern-matching)
   - [Predicates](#predicates)
+- [Pipelines](#pipelines)
+  - [Either validation chain](#either-validation-chain)
+  - [Parse and range-validate](#parse-and-range-validate)
+  - [CSV parse and filter](#csv-parse-and-filter)
+  - [Password strength classification](#password-strength-classification)
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [License](#license)
@@ -214,6 +219,172 @@ predstrings.HasSuffix(".go")("hello.go")               // true
 predstrings.ContainsRuneClass(unicode.IsUpper)("Hello") // true
 predstrings.HasAtSign("user@example.com")               // true
 predstrings.StrLenBetween(3, 5)("hello")                // true — inclusive
+```
+
+## Pipelines
+
+The fp-go-concepts examples chain multiple combinators with `F.Pipe` to
+build real-world flows. These four pipelines show loom functions composed
+across packages. Every snippet was verified to compile and its asserted
+output to hold before transcription.
+
+### Either validation chain
+
+Monadic `E.Chain` threads a value through stages; each `E.FromPredicate`
+fails fast with a stable sentinel from `eithererr.ConstErr`, so `errors.Is`
+keeps identity across calls.
+
+```go
+import (
+    E "github.com/IBM/fp-go/v2/either"
+    F "github.com/IBM/fp-go/v2/function"
+    Str "github.com/IBM/fp-go/v2/string"
+
+    eithererr "github.com/dictyBase/fp-go-loom/eithererr"
+    predord "github.com/dictyBase/fp-go-loom/predicate/ord"
+)
+
+func ValidateUsername(username string) E.Either[error, string] {
+    return F.Pipe3(
+        username,
+        E.FromPredicate(
+            Str.IsNonEmpty,
+            eithererr.ConstErr[string]("username is required"),
+        ),
+        E.Chain(E.FromPredicate(
+            predord.MinStrLen(3),
+            eithererr.ConstErr[string](
+                "username must be at least 3 characters",
+            ),
+        )),
+        E.Chain(E.FromPredicate(
+            predord.MaxStrLen(20),
+            eithererr.ConstErr[string](
+                "username must be at most 20 characters",
+            ),
+        )),
+    )
+}
+
+ValidateUsername("alice") // Right[error, string]("alice")
+ValidateUsername("")      // Left — "username is required"
+ValidateUsername("ab")    // Left — "username must be at least 3 characters"
+```
+
+### Parse and range-validate
+
+`eitherparse.ParseInt` returns `Either`; `E.Chain` composes it with a
+range check built from `predord.IntBetween`. Parse failure and range
+failure surface as distinct lefts.
+
+```go
+import (
+    E "github.com/IBM/fp-go/v2/either"
+    F "github.com/IBM/fp-go/v2/function"
+
+    eitherparse "github.com/dictyBase/fp-go-loom/either/parse"
+    eithererr "github.com/dictyBase/fp-go-loom/eithererr"
+    predord "github.com/dictyBase/fp-go-loom/predicate/ord"
+)
+
+func ParsePort(portStr string) E.Either[error, int] {
+    return F.Pipe1(
+        eitherparse.ParseInt(portStr),
+        E.Chain(E.FromPredicate(
+            predord.IntBetween(1, 65536),
+            eithererr.ConstErr[int](
+                "port must be between 1 and 65535",
+            ),
+        )),
+    )
+}
+
+ParsePort("8080") // Right[error, int](8080)
+ParsePort("abc")  // Left — "failed to parse int: ..."
+ParsePort("70000") // Left — "port must be between 1 and 65535"
+```
+
+### CSV parse and filter
+
+`A.FilterMap` keeps rows whose split passes `predarrays.LenEq`; each kept
+row is mapped into a struct via `O.Map`.
+
+```go
+import (
+    "strings"
+
+    A "github.com/IBM/fp-go/v2/array"
+    F "github.com/IBM/fp-go/v2/function"
+    O "github.com/IBM/fp-go/v2/option"
+
+    predarrays "github.com/dictyBase/fp-go-loom/predicate/array"
+)
+
+type Customer struct{ ID, Name string }
+
+func ParseCustomers(lines []string) []Customer {
+    return F.Pipe1(
+        lines,
+        A.FilterMap(func(line string) O.Option[Customer] {
+            parts := strings.Split(line, ",")
+            return F.Pipe2(
+                parts,
+                O.FromPredicate(predarrays.LenEq[string](2)),
+                O.Map(func(p []string) Customer {
+                    return Customer{ID: p[0], Name: p[1]}
+                }),
+            )
+        }),
+    )
+}
+
+ParseCustomers([]string{"1,Alice", "bad", "2,Bob", "3,Carol,Extra"})
+// []Customer{{ID:"1", Name:"Alice"}, {ID:"2", Name:"Bob"}}
+```
+
+### Password strength classification
+
+`predstrings.ContainsRuneClass` and `predord.MinStrLen`/`MaxStrLen` compose
+into strength predicates via `Pred.And`; `matchopt.Const` + `First`
+classify. Strong implies medium, so arms run most-specific first.
+
+```go
+import (
+    "unicode"
+
+    F "github.com/IBM/fp-go/v2/function"
+    O "github.com/IBM/fp-go/v2/option"
+    Pred "github.com/IBM/fp-go/v2/predicate"
+
+    MO "github.com/dictyBase/fp-go-loom/matchopt"
+    predord "github.com/dictyBase/fp-go-loom/predicate/ord"
+    predstrings "github.com/dictyBase/fp-go-loom/predicate/strings"
+)
+
+func ClassifyPassword(pw string) string {
+    hasUpper := predstrings.ContainsRuneClass(unicode.IsUpper)
+    hasLower := predstrings.ContainsRuneClass(unicode.IsLower)
+    hasDigit := predstrings.ContainsRuneClass(unicode.IsDigit)
+    isLongEnough := predord.MinStrLen(8)
+    isShort := predord.MaxStrLen(7)
+
+    medium := F.Pipe2(
+        isLongEnough, Pred.And(hasUpper), Pred.And(hasLower),
+    )
+    strong := F.Pipe1(medium, Pred.And(hasDigit))
+
+    armStrong := MO.Const(strong, "strong")
+    armMedium := MO.Const(medium, "medium")
+    armWeak := MO.Const(isShort, "weak")
+
+    return MO.First("unknown", []O.Option[string]{
+        armStrong(pw), armMedium(pw), armWeak(pw),
+    })
+}
+
+ClassifyPassword("123")         // "weak"
+ClassifyPassword("Password")    // "medium"
+ClassifyPassword("Password123") // "strong"
 ```
 
 ## Project Structure
