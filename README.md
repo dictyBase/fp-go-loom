@@ -56,6 +56,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `strutils` | `JoinStrings` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `FunctionPkgPath`, `DefaultAllowDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -220,6 +221,47 @@ predstrings.ContainsRuneClass(unicode.IsUpper)("Hello") // true
 predstrings.HasAtSign("user@example.com")               // true
 predstrings.StrLenBetween(3, 5)("hello")                // true — inclusive
 ```
+
+### Pipeline continuity
+
+`pipelinecheck` flags fp-go CLI entrypoints that delegate the whole
+continuation to a single-use wrapper via `F.Pipe1(seed, namedFn)` instead
+of inlining the steps into one `F.PipeN`. Drop a small `_test.go` into
+any package whose `run*`/Action handlers should stay inline:
+
+```go
+package cmd
+
+import (
+	"strings"
+	"testing"
+
+	pipelinecheck "github.com/dictyBase/fp-go-loom/pipelinecheck"
+)
+
+func TestPipelineContinuity(t *testing.T) {
+	pipelinecheck.Require(t, pipelinecheck.Config{
+		Roots: []string{"."},
+		IsEntrypoint: func(name string) bool {
+			return strings.HasPrefix(name, "run")
+		},
+	})
+}
+```
+
+Opt a genuinely-reused wrapper out with a doc comment carrying a
+non-empty reason:
+
+```go
+// fp-go:allow-pipe1-handoff reused by runA and runB
+func runThing(ctx context.Context, c *cli3.Command) error {
+	return F.Pipe1(seed(ctx, c), sharedHandler)
+}
+```
+
+The function-package alias is resolved from each file's imports, so
+`F`, `fn`, or the default `function` all work. Analysis is syntax-only
+(see package doc for limitations).
 
 ## Pipelines
 
@@ -418,9 +460,12 @@ ClassifyPassword("Password123") // "strong"
 │   └── strings/
 │       ├── strings.go         # LastIndexOf, HasSuffix, HasAtSign, ...
 │       └── strings_test.go
-└── strutils/
-    ├── strutils.go            # JoinStrings
-    └── strutils_test.go
+├── strutils/
+│   ├── strutils.go            # JoinStrings
+│   └── strutils_test.go
+└── pipelinecheck/
+    ├── pipelinecheck.go       # Check, Require, Config, Violation
+    └── pipelinecheck_test.go
 ```
 
 ## Development
