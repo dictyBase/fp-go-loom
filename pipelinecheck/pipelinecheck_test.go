@@ -267,6 +267,169 @@ func TestCheckFileTable(t *testing.T) {
 	}
 }
 
+// seedCases are the table-driven detection cases for the opt-in
+// applied-seed rule (Config.RequirePointFreeSeed = true).
+var seedCases = []checkCase{
+	{
+		name: "applied seed flagged",
+		src: `package testpkg
+import (
+	"context"
+	F "github.com/IBM/fp-go/v2/function"
+)
+type State struct{ Ctx context.Context }
+func seedState(ctx context.Context) State { return State{Ctx: ctx} }
+func runThing(ctx context.Context) error {
+	return F.Pipe2(seedState(ctx), step, fold)
+}
+func step(State) State { return State{} }
+func fold(State) error { return nil }
+`,
+		wantCount: 1,
+		wantMsg:   "applied call",
+	},
+	{
+		name: "struct-literal seed not flagged",
+		src: `package testpkg
+import (
+	"context"
+	F "github.com/IBM/fp-go/v2/function"
+)
+type Input struct{ Ctx context.Context }
+type State struct{ Ctx context.Context }
+func seedState(in Input) State { return State{Ctx: in.Ctx} }
+func runThing(ctx context.Context) error {
+	return F.Pipe3(Input{Ctx: ctx}, seedState, step, fold)
+}
+func step(State) State { return State{} }
+func fold(State) error { return nil }
+`,
+		wantCount: 0,
+	},
+	{
+		name: "applied seed without param ref not flagged",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func makeSeed() int { return 0 }
+func runThing(s int) error {
+	return F.Pipe2(makeSeed(), step, fold)
+}
+func step(int) int { return 0 }
+func fold(int) error { return nil }
+`,
+		wantCount: 0,
+	},
+	{
+		name: "applied seed with nested param ref flagged",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+type State struct{ V string }
+func seedState(s string) State { return State{V: s} }
+func runThing(s string) error {
+	return F.Pipe2(seedState(s + "x"), step, fold)
+}
+func step(State) State { return State{} }
+func fold(State) error { return nil }
+`,
+		wantCount: 1,
+	},
+	{
+		name: "applied seed alternate alias flagged",
+		src: `package testpkg
+import fn "github.com/IBM/fp-go/v2/function"
+func makeSeed(s int) int { return s }
+func runThing(s int) error {
+	return fn.Pipe2(makeSeed(s), step, fold)
+}
+func step(int) int { return 0 }
+func fold(int) error { return nil }
+`,
+		wantCount: 1,
+	},
+	{
+		name: "applied seed generic PipeN flagged",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func makeSeed(s int) int { return s }
+func runThing(s int) error {
+	return F.Pipe2[int, error](makeSeed(s), fold)
+}
+func fold(int) error { return nil }
+`,
+		wantCount: 1,
+	},
+	{
+		name: "applied seed exemption with reason honored",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func makeSeed(s int) int { return s }
+// fp-go:allow-applied-seed reused by runA and runB
+func runThing(s int) error {
+	return F.Pipe2(makeSeed(s), fold)
+}
+func fold(int) error { return nil }
+`,
+		wantCount: 0,
+	},
+	{
+		name: "applied seed directive without reason flagged",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func makeSeed(s int) int { return s }
+// fp-go:allow-applied-seed
+func runThing(s int) error {
+	return F.Pipe2(makeSeed(s), fold)
+}
+func fold(int) error { return nil }
+`,
+		wantCount: 1,
+		wantMsg:   "non-empty reason",
+	},
+	{
+		name: "applied seed typoed directive not honored",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func makeSeed(s int) int { return s }
+// fp-go:allow-applied-seedx reason
+func runThing(s int) error {
+	return F.Pipe2(makeSeed(s), fold)
+}
+func fold(int) error { return nil }
+`,
+		wantCount: 1,
+		wantMsg:   "applied call",
+	},
+}
+
+func TestAppliedSeedTable(t *testing.T) {
+	cfg := withDefaults(Config{RequirePointFreeSeed: true})
+	for _, tc := range seedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset, f := parse(t, tc.src)
+			vs := checkFile(fset, f, cfg)
+			require.Len(t, vs, tc.wantCount)
+			if tc.wantMsg != "" {
+				require.Contains(t, vs[0].Message, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// seedCasesOff checks that with RequirePointFreeSeed = false (the
+// default), applied-seed patterns are never flagged.
+func TestAppliedSeedDisabledByDefault(t *testing.T) {
+	cfg := withDefaults(Config{})
+	for _, tc := range seedCases {
+		if tc.name == "applied seed rule off by default" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			fset, f := parse(t, tc.src)
+			require.Empty(t, checkFile(fset, f, cfg))
+		})
+	}
+}
+
 func TestCustomEntrypointPredicate(t *testing.T) {
 	src := `package testpkg
 import F "github.com/IBM/fp-go/v2/function"
