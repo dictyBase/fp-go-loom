@@ -1,19 +1,30 @@
 // Package pipelinecheck enforces fp-go pipeline continuity for CLI
 // entrypoints. A function matching the entrypoint predicate (run* by
-// default) must expose a complete F.PipeN expression; a single-step
-// F.Pipe1(seed, namedFn) handoff to a single-use wrapper is flagged.
+// default) must expose a complete F.PipeN expression. Two anti-patterns
+// are detected:
 //
-// Opt a function out with a doc comment of the form:
+//  1. Handoff wrapper: a single-step F.Pipe1(seed, namedFn) that
+//     delegates the whole continuation to a single-use wrapper.
+//  2. Applied seed (opt-in via Config.RequirePointFreeSeed): the Pipe's
+//     first argument is a call that pre-applies entrypoint parameters
+//     (e.g. F.Pipe4(seedUploadState(ctx, c), ...)) instead of treating
+//     a boundary value as the seed and making the constructor a unary
+//     Pipe step (e.g. F.Pipe4(ActionInput{...}, seedUploadState, ...)).
+//
+// Opt a function out of the handoff rule with:
 //
 //	// fp-go:allow-pipe1-handoff <reason>
 //
-// The directive must be followed by a non-empty reason. Use it only when
-// the wrapper is genuinely reused (2+ call sites) or is an independently
-// meaningful domain operation — not for a single-use force/fold
-// continuation.
+// and out of the applied-seed rule with:
 //
-// Limitations: analysis is syntax-only (no go/types), so a shadowed alias
-// of the function package may false-positive and a dot import
+//	// fp-go:allow-applied-seed <reason>
+//
+// Both directives require a non-empty reason. Use them only when the
+// wrapper is genuinely reused (2+ call sites) or is an independently
+// meaningful domain operation.
+//
+// Limitations: analysis is syntax-only (no go/types), so a shadowed
+// alias of the function package may false-positive and a dot import
 // (import . ".../function") false-negatives. Assign-then-return shapes
 // (p := F.Pipe1(...); return p) are not inspected; only the returned
 // expression is checked. See the fp-go-pipe-flow skill Anti-patterns
@@ -39,8 +50,13 @@ import (
 const FunctionPkgPath = "github.com/IBM/fp-go/v2/function"
 
 // DefaultAllowDirective is the doc-comment marker that exempts a
-// function when followed by a non-empty reason.
+// function from the handoff rule when followed by a non-empty reason.
 const DefaultAllowDirective = "fp-go:allow-pipe1-handoff"
+
+// DefaultAllowAppliedSeedDirective is the doc-comment marker that
+// exempts a function from the applied-seed rule when followed by a
+// non-empty reason.
+const DefaultAllowAppliedSeedDirective = "fp-go:allow-applied-seed"
 
 // Reporter is the minimal subset of testing.TB that Require needs.
 // *testing.T and *testing.B satisfy it implicitly; tests may pass a
@@ -54,18 +70,27 @@ type Reporter interface {
 // Config configures a Check run.
 type Config struct {
 	// Roots are directories scanned recursively for non-test .go
-	// files. Defaults to []string{"."} when empty. Duplicate paths are
-	// deduplicated.
+	// files. Defaults to []string{"."} when empty. Duplicate paths
+	// are deduplicated.
 	Roots []string
 
 	// IsEntrypoint reports whether a function name is a CLI entrypoint
 	// worth checking. Defaults to "has prefix run" when nil.
 	IsEntrypoint func(name string) bool
 
-	// AllowDirective is the doc-comment marker that exempts a function.
-	// The directive must be followed by a non-empty reason. Defaults to
+	// AllowDirective exempts a function from the handoff rule. The
+	// directive must be followed by a non-empty reason. Defaults to
 	// DefaultAllowDirective when empty.
 	AllowDirective string
+
+	// AllowAppliedSeedDirective exempts a function from the
+	// applied-seed rule. Defaults to DefaultAllowAppliedSeedDirective
+	// when empty.
+	AllowAppliedSeedDirective string
+
+	// RequirePointFreeSeed enables the applied-seed rule. When false
+	// (the default), only the handoff rule runs.
+	RequirePointFreeSeed bool
 }
 
 // Violation is a single pipeline-continuity failure.
@@ -85,8 +110,8 @@ func (v Violation) String() string {
 	)
 }
 
-// Check scans cfg.Roots and returns every F.Pipe1(seed, namedFn) handoff
-// in an entrypoint that lacks a valid exemption.
+// Check scans cfg.Roots and returns every continuity violation in an
+// entrypoint that lacks a valid exemption.
 func Check(cfg Config) ([]Violation, error) {
 	cfg = withDefaults(cfg)
 	seen := make(map[string]bool)
@@ -135,6 +160,9 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.AllowDirective == "" {
 		cfg.AllowDirective = DefaultAllowDirective
+	}
+	if cfg.AllowAppliedSeedDirective == "" {
+		cfg.AllowAppliedSeedDirective = DefaultAllowAppliedSeedDirective
 	}
 	return cfg
 }
@@ -240,18 +268,29 @@ func appendFuncViolations(
 	aliases map[string]bool,
 	cfg Config,
 ) {
-	switch exemptionStatus(fn, cfg.AllowDirective) {
-	case exempt:
-		return
-	case directiveWithoutReason:
-		*out = append(*out, Violation{
-			Position: fset.Position(fn.Pos()),
-			Function: fn.Name.Name,
-			Message: cfg.AllowDirective +
-				" directive requires a non-empty reason",
-		})
-		return
+	handoffStatus := exemptionStatus(fn, cfg.AllowDirective)
+	appendDirectiveErrors(
+		out,
+		fset,
+		fn,
+		handoffStatus,
+		cfg.AllowDirective,
+	)
+	var seedStatus exemption
+	if cfg.RequirePointFreeSeed {
+		seedStatus = exemptionStatus(
+			fn,
+			cfg.AllowAppliedSeedDirective,
+		)
+		appendDirectiveErrors(
+			out,
+			fset,
+			fn,
+			seedStatus,
+			cfg.AllowAppliedSeedDirective,
+		)
 	}
+	params := entrypointParams(fn)
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		ret, ok := n.(*ast.ReturnStmt)
 		if !ok {
@@ -259,19 +298,53 @@ func appendFuncViolations(
 		}
 		for _, expr := range ret.Results {
 			call, ok := expr.(*ast.CallExpr)
-			if !ok || !isPipe1Handoff(call, aliases) {
+			if !ok {
 				continue
 			}
-			*out = append(*out, Violation{
-				Position: fset.Position(call.Pos()),
-				Function: fn.Name.Name,
-				Message: "returns F.Pipe1(seed, namedFn) — " +
-					"inline the wrapper's steps into the " +
-					"entrypoint F.PipeN " +
-					"(fp-go-pipe-flow Anti-patterns)",
-			})
+			if handoffStatus == notExempt &&
+				isPipe1Handoff(call, aliases) {
+				*out = append(*out, Violation{
+					Position: fset.Position(call.Pos()),
+					Function: fn.Name.Name,
+					Message: "returns F.Pipe1(seed, namedFn) — " +
+						"inline the wrapper's steps into the " +
+						"entrypoint F.PipeN " +
+						"(fp-go-pipe-flow Anti-patterns)",
+				})
+			}
+			if cfg.RequirePointFreeSeed &&
+				seedStatus == notExempt &&
+				isAppliedSeedPipe(call, aliases, params) {
+				*out = append(*out, Violation{
+					Position: fset.Position(call.Pos()),
+					Function: fn.Name.Name,
+					Message: "Pipe seed is an applied call " +
+						"referencing entrypoint params — " +
+						"construct a boundary-input value and " +
+						"move the constructor into the Pipe " +
+						"(fp-go-pipe-flow Anti-patterns)",
+				})
+			}
 		}
 		return true
+	})
+}
+
+func appendDirectiveErrors(
+	out *[]Violation,
+	fset *token.FileSet,
+	fn *ast.FuncDecl,
+	status exemption,
+	directive string,
+) {
+	if status != directiveWithoutReason {
+		return
+	}
+	*out = append(*out, Violation{
+		Position: fset.Position(fn.Pos()),
+		Function: fn.Name.Name,
+		Message: directive +
+			" directive requires a non-empty reason",
 	})
 }
 
@@ -283,11 +356,11 @@ const (
 	directiveWithoutReason
 )
 
-// exemptionStatus inspects fn's doc comment for the allow directive.
-// A directive followed by a word boundary and a non-empty reason
-// exempts the function. A directive with no reason is a separate
-// violation so the author knows why the exemption did not apply. A
-// typo'd directive (e.g. allow-pipe1-handoffx) is not matched.
+// exemptionStatus inspects fn's doc comment for directive. A directive
+// followed by a word boundary and a non-empty reason exempts the
+// function. A directive with no reason is a separate violation so the
+// author knows why the exemption did not apply. A typo'd directive
+// (e.g. allow-pipe1-handoffx) is not matched.
 func exemptionStatus(
 	fn *ast.FuncDecl,
 	directive string,
@@ -352,11 +425,28 @@ func functionAliases(f *ast.File) map[string]bool {
 	return aliases
 }
 
+// entrypointParams returns the set of named parameter identifiers of
+// fn, used to detect applied-seed calls that reference them.
+func entrypointParams(fn *ast.FuncDecl) map[string]bool {
+	params := make(map[string]bool)
+	if fn.Type.Params == nil {
+		return params
+	}
+	for _, field := range fn.Type.Params.List {
+		for _, name := range field.Names {
+			if name.Name != "" && name.Name != "_" {
+				params[name.Name] = true
+			}
+		}
+	}
+	return params
+}
+
 func isPipe1Handoff(
 	call *ast.CallExpr,
 	aliases map[string]bool,
 ) bool {
-	sel := pipe1Selector(call.Fun)
+	sel := pipeSelector(call.Fun)
 	if sel == nil || sel.Sel.Name != "Pipe1" {
 		return false
 	}
@@ -369,9 +459,56 @@ func isPipe1Handoff(
 	return isNamedContinuation(call.Args[1])
 }
 
-// pipe1Selector unwraps generic instantiation
+// isAppliedSeedPipe flags an F.PipeN(...) call whose first argument
+// (the seed) is itself a call that references one or more entrypoint
+// parameters. The fix is to make the seed a boundary-input value and
+// move the constructor into the Pipe as a unary step.
+func isAppliedSeedPipe(
+	call *ast.CallExpr,
+	aliases map[string]bool,
+	params map[string]bool,
+) bool {
+	sel := pipeSelector(call.Fun)
+	if sel == nil || !strings.HasPrefix(sel.Sel.Name, "Pipe") {
+		return false
+	}
+	if !isFunctionAlias(sel.X, aliases) {
+		return false
+	}
+	if len(call.Args) < 2 {
+		return false
+	}
+	seed, ok := call.Args[0].(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	return referencesParams(seed, params)
+}
+
+// referencesParams reports whether expr contains any identifier
+// matching a name in params.
+func referencesParams(
+	expr ast.Expr,
+	params map[string]bool,
+) bool {
+	if len(params) == 0 {
+		return false
+	}
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		ident, ok := n.(*ast.Ident)
+		if ok && params[ident.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// pipeSelector unwraps generic instantiation
 // (F.Pipe1[int, error](...)) to reach the underlying SelectorExpr.
-func pipe1Selector(fun ast.Expr) *ast.SelectorExpr {
+func pipeSelector(fun ast.Expr) *ast.SelectorExpr {
 	switch e := fun.(type) {
 	case *ast.SelectorExpr:
 		return e
