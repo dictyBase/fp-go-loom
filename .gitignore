@@ -19,3 +19,4 @@ profile.cov
 
 # pi/session artifact (repo-root only)
 /fp-go-loom.jsonl
+/.grepai
