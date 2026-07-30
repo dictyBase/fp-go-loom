@@ -440,7 +440,10 @@ func handlerFn(int) error { return nil }
 `
 	fset, f := parse(t, src)
 	// default (run*) does not flag handleThing.
-	require.Empty(t, checkFile(fset, f, withDefaults(Config{})))
+	require.Empty(
+		t,
+		checkFile(fset, f, withDefaults(Config{})),
+	)
 	// custom predicate does flag it.
 	custom := withDefaults(Config{
 		IsEntrypoint: func(name string) bool {
