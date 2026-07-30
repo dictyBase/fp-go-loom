@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Four rules are available via dedicated entry points:
+// AST checks. Five rules are available via dedicated entry points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
 //     single-step F.Pipe1(seed, namedFn) that delegates the whole
@@ -14,10 +14,15 @@
 //  4. Safe Printf (CheckSafePrintf): an IO.Printf call whose literal
 //     or package-local constant format string has no real verb,
 //     which dumps the value via %!(EXTRA ...) and can leak secrets.
+//  5. Redundant Fold (CheckRedundantFold): an E.Fold/E.Match call
+//     whose Right (success) arm discards its argument by returning
+//     nil. Such a Fold is equivalent to E.ToError; use E.ToError[A]
+//     (or F.Flow2(E.ToError[A], leftTransform)) instead of the
+//     discard arm.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 and 4 apply to all
-// functions, since TryCatch and Printf appear anywhere.
+// Config.IsEntrypoint, "run*" by default). Rules 3, 4, and 5 apply to
+// all functions, since TryCatch, Printf, and Fold appear anywhere.
 //
 // Opt a function out of a rule with the matching doc-comment directive,
 // each requiring a non-empty reason:
@@ -26,6 +31,7 @@
 //	// fp-go:allow-applied-seed <reason>
 //	// fp-go:allow-trycatch-iferr <reason>
 //	// fp-go:allow-unsafe-printf <reason>
+//	// fp-go:allow-redundant-fold <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -37,7 +43,9 @@
 // and not flagged. The printf directive parser supports the documented
 // fmt verbs, flags, width/precision, argument indexes, and `*` stars
 // tested in stylecheck_test.go; `%w` is excluded (it is only
-// meaningful to fmt.Errorf).
+// meaningful to fmt.Errorf). Redundant-Fold inspects the Right arm of
+// E.Fold/E.Match (Either only, not IOE.Fold); a Constant* combinator
+// wrapping a non-nil value is a legitimate fold and is not flagged.
 //
 // This package walks Go ASTs imperatively. ast.Inspect's callback model
 // does not fit fp-go pipe composition, so the walk layers are imperative
@@ -76,6 +84,10 @@ const IOEitherPkgPath = "github.com/IBM/fp-go/v2/ioeither"
 // safe-Printf rule.
 const IOPkgPath = "github.com/IBM/fp-go/v2/io"
 
+// EitherPkgPath is the canonical fp-go either-package import path,
+// used by the redundant-Fold rule.
+const EitherPkgPath = "github.com/IBM/fp-go/v2/either"
+
 // DefaultAllowTryCatchIfErrDirective exempts a function from the
 // TryCatch-if-err rule when followed by a non-empty reason.
 const DefaultAllowTryCatchIfErrDirective = "fp-go:allow-trycatch-iferr"
@@ -83,6 +95,10 @@ const DefaultAllowTryCatchIfErrDirective = "fp-go:allow-trycatch-iferr"
 // DefaultAllowUnsafePrintfDirective exempts a function from the
 // safe-Printf rule when followed by a non-empty reason.
 const DefaultAllowUnsafePrintfDirective = "fp-go:allow-unsafe-printf"
+
+// DefaultAllowRedundantFoldDirective exempts a function from the
+// redundant-Fold rule when followed by a non-empty reason.
+const DefaultAllowRedundantFoldDirective = "fp-go:allow-redundant-fold"
 
 // Reporter is the minimal subset of testing.TB that Require needs.
 // *testing.T and *testing.B satisfy it implicitly; tests may pass a
@@ -127,6 +143,11 @@ type Config struct {
 	// safe-Printf rule (used by CheckSafePrintf).
 	// Defaults to DefaultAllowUnsafePrintfDirective when empty.
 	AllowUnsafePrintfDirective string
+
+	// AllowRedundantFoldDirective exempts a function from the
+	// redundant-Fold rule (used by CheckRedundantFold).
+	// Defaults to DefaultAllowRedundantFoldDirective when empty.
+	AllowRedundantFoldDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -244,6 +265,46 @@ func RequireSafePrintf(r Reporter, cfg Config) {
 	}
 }
 
+// CheckRedundantFold scans cfg.Roots and returns every E.Fold/E.Match
+// call whose Right (success) arm discards its argument by returning
+// nil. Such a Fold is equivalent to E.ToError; use E.ToError[A] (or
+// F.Flow2(E.ToError[A], leftTransform)) instead of spelling the
+// discard arm. cfg.AllowRedundantFoldDirective exempts a function
+// (defaults to DefaultAllowRedundantFoldDirective).
+func CheckRedundantFold(cfg Config) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var violations []Violation
+	for _, p := range parsed {
+		aliases := eitherAliases(p.f)
+		if len(aliases) == 0 {
+			continue
+		}
+		violations = append(violations,
+			checkRedundantFold(
+				p.fset, p.f, aliases,
+				cfg.AllowRedundantFoldDirective,
+			)...)
+	}
+	return violations, nil
+}
+
+// RequireNoRedundantFold runs CheckRedundantFold and fails r on every
+// violation or scan error.
+func RequireNoRedundantFold(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckRedundantFold(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
+}
+
 // ModuleRoot walks up from the test working directory until it finds
 // a directory containing go.mod, returning that path. It fatals r when
 // go.mod cannot be found, so a wired gate test fails fast instead of
@@ -309,6 +370,9 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.AllowUnsafePrintfDirective == "" {
 		cfg.AllowUnsafePrintfDirective = DefaultAllowUnsafePrintfDirective
+	}
+	if cfg.AllowRedundantFoldDirective == "" {
+		cfg.AllowRedundantFoldDirective = DefaultAllowRedundantFoldDirective
 	}
 	return cfg
 }
@@ -638,6 +702,11 @@ func ioeitherAliases(f *ast.File) map[string]bool {
 // ioAliases returns aliases for the fp-go IO package.
 func ioAliases(f *ast.File) map[string]bool {
 	return importAliasesFor(f, IOPkgPath)
+}
+
+// eitherAliases returns aliases for the fp-go either package.
+func eitherAliases(f *ast.File) map[string]bool {
+	return importAliasesFor(f, EitherPkgPath)
 }
 
 // enclosingFuncName returns the name of the FuncDecl containing pos.
