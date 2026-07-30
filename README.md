@@ -55,7 +55,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `strutils` | `JoinStrings` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `FunctionPkgPath`, `DefaultAllowDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckSafePrintf`, `RequireSafePrintf`, `FunctionPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowUnsafePrintfDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -221,7 +221,7 @@ predstrings.HasAtSign("user@example.com")               // true
 predstrings.StrLenBetween(3, 5)("hello")                // true — inclusive
 ```
 
-### Pipeline continuity
+### Pipeline and style checks
 
 `pipelinecheck` flags fp-go CLI entrypoints that delegate the whole
 continuation to a single-use wrapper via `F.Pipe1(seed, namedFn)` instead
@@ -261,6 +261,47 @@ func runThing(ctx context.Context, c *cli3.Command) error {
 The function-package alias is resolved from each file's imports, so
 `F`, `fn`, or the default `function` all work. Analysis is syntax-only
 (see package doc for limitations).
+
+#### TryCatch raw-effect rule
+
+`RequireNoIfErrInTryCatch` flags `if err != nil` / `if nil != err` inside
+an `IOE.TryCatchError` callback literal. `TryCatchError` should hold the
+raw SDK effect; projection and wrapping belong in `IOE.MapLeft` /
+`IOE.Map`. The rule applies to **all** functions, not just entrypoints.
+Resolve the `IOEither` import alias automatically (`IOE`, `ioeither`,
+or a custom alias).
+
+```go
+func TestNoIfErrInTryCatch(t *testing.T) {
+	pipelinecheck.RequireNoIfErrInTryCatch(t, pipelinecheck.Config{
+		Roots: []string{"."},
+	})
+}
+```
+
+Opt out with `// fp-go:allow-trycatch-iferr <reason>`.
+
+#### Safe-Printf rule
+
+`RequireSafePrintf` flags `IO.Printf` calls whose literal or package-local
+constant format string has no real formatting verb. A verb-less format
+dumps the value via `%!(EXTRA type=value)` and can leak secrets such as
+API keys. The rule applies to **all** functions. The printf directive
+parser handles flags, `[index]`, width/precision (digits, `*`, indexed
+stars), and the documented fmt verbs (`%U`, `%F` included; `%w` excluded
+— it is only meaningful to `fmt.Errorf`). Package-local string constants
+are resolved across files in the same package, including grouped,
+inherited, and concatenated ones.
+
+```go
+func TestSafePrintf(t *testing.T) {
+	pipelinecheck.RequireSafePrintf(t, pipelinecheck.Config{
+		Roots: []string{"."},
+	})
+}
+```
+
+Opt out with `// fp-go:allow-unsafe-printf <reason>`.
 
 ## Pipelines
 
@@ -464,7 +505,10 @@ ClassifyPassword("Password123") // "strong"
 │   └── strutils_test.go
 └── pipelinecheck/
     ├── pipelinecheck.go       # Check, Require, Config, Violation
-    └── pipelinecheck_test.go
+    ├── trycatch.go            # NoIfErrInTryCatch rule
+    ├── printf.go              # SafePrintf rule + const resolution
+    ├── pipelinecheck_test.go  # handoff + applied-seed tests
+    └── stylecheck_test.go     # trycatch + printf tests
 ```
 
 ## Development
