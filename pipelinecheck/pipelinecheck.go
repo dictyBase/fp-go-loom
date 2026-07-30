@@ -1,34 +1,43 @@
-// Package pipelinecheck enforces fp-go pipeline continuity for CLI
-// entrypoints. A function matching the entrypoint predicate (run* by
-// default) must expose a complete F.PipeN expression. Two anti-patterns
-// are detected:
+// Package pipelinecheck enforces fp-go style rules via syntax-only
+// AST checks. Four rules are available via dedicated entry points:
 //
-//  1. Handoff wrapper: a single-step F.Pipe1(seed, namedFn) that
-//     delegates the whole continuation to a single-use wrapper.
-//  2. Applied seed (opt-in via Config.RequirePointFreeSeed): the Pipe's
-//     first argument is a call that pre-applies entrypoint parameters
-//     (e.g. F.Pipe4(seedUploadState(ctx, c), ...)) instead of treating
-//     a boundary value as the seed and making the constructor a unary
-//     Pipe step (e.g. F.Pipe4(ActionInput{...}, seedUploadState, ...)).
+//  1. Handoff wrapper (Check/Require, default on for entrypoints): a
+//     single-step F.Pipe1(seed, namedFn) that delegates the whole
+//     continuation to a single-use wrapper.
+//  2. Applied seed (Check/Require with Config.RequirePointFreeSeed):
+//     the Pipe's first argument is a call that pre-applies entrypoint
+//     parameters instead of treating a boundary value as the seed.
+//  3. TryCatch raw-effect (CheckNoIfErrInTryCatch): `if err != nil` /
+//     `if nil != err` inside an IOE.TryCatchError callback literal.
+//     TryCatchError should hold the raw SDK effect; projection and
+//     wrapping belong in IOE.MapLeft / IOE.Map.
+//  4. Safe Printf (CheckSafePrintf): an IO.Printf call whose literal
+//     or package-local constant format string has no real verb,
+//     which dumps the value via %!(EXTRA ...) and can leak secrets.
 //
-// Opt a function out of the handoff rule with:
+// Rules 1 and 2 are entrypoint-scoped (a function matching
+// Config.IsEntrypoint, "run*" by default). Rules 3 and 4 apply to all
+// functions, since TryCatch and Printf appear anywhere.
+//
+// Opt a function out of a rule with the matching doc-comment directive,
+// each requiring a non-empty reason:
 //
 //	// fp-go:allow-pipe1-handoff <reason>
-//
-// and out of the applied-seed rule with:
-//
 //	// fp-go:allow-applied-seed <reason>
-//
-// Both directives require a non-empty reason. Use them only when the
-// wrapper is genuinely reused (2+ call sites) or is an independently
-// meaningful domain operation.
+//	// fp-go:allow-trycatch-iferr <reason>
+//	// fp-go:allow-unsafe-printf <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
-// alias of the function package may false-positive and a dot import
-// (import . ".../function") false-negatives. Assign-then-return shapes
-// (p := F.Pipe1(...); return p) are not inspected; only the returned
-// expression is checked. See the fp-go-pipe-flow skill Anti-patterns
-// section.
+// alias of a target package may false-positive and a dot import (import
+// . ".../pkg") may cause false negatives. Assign-then-return shapes (p
+// := F.Pipe1(...); return p) are not inspected; only the returned
+// expression is checked. Safe-Printf resolves package-local string
+// constants (grouped, inherited, concatenated, and cross-file within
+// the same package); cross-package or computed constants are dynamic
+// and not flagged. The printf directive parser supports the documented
+// fmt verbs, flags, width/precision, argument indexes, and `*` stars
+// tested in stylecheck_test.go; `%w` is excluded (it is only
+// meaningful to fmt.Errorf).
 //
 // This package walks Go ASTs imperatively. ast.Inspect's callback model
 // does not fit fp-go pipe composition, so the walk layers are imperative
@@ -41,6 +50,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -57,6 +67,22 @@ const DefaultAllowDirective = "fp-go:allow-pipe1-handoff"
 // exempts a function from the applied-seed rule when followed by a
 // non-empty reason.
 const DefaultAllowAppliedSeedDirective = "fp-go:allow-applied-seed"
+
+// IOEitherPkgPath is the canonical fp-go IOEither import path, used
+// by the TryCatch raw-effect rule.
+const IOEitherPkgPath = "github.com/IBM/fp-go/v2/ioeither"
+
+// IOPkgPath is the canonical fp-go IO import path, used by the
+// safe-Printf rule.
+const IOPkgPath = "github.com/IBM/fp-go/v2/io"
+
+// DefaultAllowTryCatchIfErrDirective exempts a function from the
+// TryCatch-if-err rule when followed by a non-empty reason.
+const DefaultAllowTryCatchIfErrDirective = "fp-go:allow-trycatch-iferr"
+
+// DefaultAllowUnsafePrintfDirective exempts a function from the
+// safe-Printf rule when followed by a non-empty reason.
+const DefaultAllowUnsafePrintfDirective = "fp-go:allow-unsafe-printf"
 
 // Reporter is the minimal subset of testing.TB that Require needs.
 // *testing.T and *testing.B satisfy it implicitly; tests may pass a
@@ -91,9 +117,19 @@ type Config struct {
 	// RequirePointFreeSeed enables the applied-seed rule. When false
 	// (the default), only the handoff rule runs.
 	RequirePointFreeSeed bool
+
+	// AllowTryCatchIfErrDirective exempts a function from the
+	// TryCatch-if-err rule (used by CheckNoIfErrInTryCatch).
+	// Defaults to DefaultAllowTryCatchIfErrDirective when empty.
+	AllowTryCatchIfErrDirective string
+
+	// AllowUnsafePrintfDirective exempts a function from the
+	// safe-Printf rule (used by CheckSafePrintf).
+	// Defaults to DefaultAllowUnsafePrintfDirective when empty.
+	AllowUnsafePrintfDirective string
 }
 
-// Violation is a single pipeline-continuity failure.
+// Violation is a single style-rule failure.
 type Violation struct {
 	Position token.Position
 	Function string
@@ -110,30 +146,134 @@ func (v Violation) String() string {
 	)
 }
 
-// Check scans cfg.Roots and returns every continuity violation in an
-// entrypoint that lacks a valid exemption.
+// Check scans cfg.Roots and returns every entrypoint-rule violation
+// (handoff and, when RequirePointFreeSeed is set, applied-seed) that
+// lacks a valid exemption. It does NOT run the TryCatch or Printf
+// rules; use CheckNoIfErrInTryCatch / CheckSafePrintf for those.
 func Check(cfg Config) ([]Violation, error) {
 	cfg = withDefaults(cfg)
-	seen := make(map[string]bool)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
 	var violations []Violation
-	for _, root := range dedupeRoots(cfg.Roots) {
-		files, err := nonTestGoFiles(root)
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range files {
-			if seen[file] {
-				continue
-			}
-			seen[file] = true
-			vs, err := checkFileOnDisk(cfg, file)
-			if err != nil {
-				return nil, err
-			}
-			violations = append(violations, vs...)
-		}
+	for _, p := range parsed {
+		violations = append(violations,
+			checkFile(p.fset, p.f, cfg)...)
 	}
 	return violations, nil
+}
+
+// CheckNoIfErrInTryCatch scans cfg.Roots and returns every
+// `if err != nil` / `if nil != err` inside an IOE.TryCatchError
+// callback literal. cfg.AllowTryCatchIfErrDirective exempts a
+// function (defaults to DefaultAllowTryCatchIfErrDirective).
+func CheckNoIfErrInTryCatch(
+	cfg Config,
+) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var violations []Violation
+	for _, p := range parsed {
+		aliases := ioeitherAliases(p.f)
+		if len(aliases) == 0 {
+			continue
+		}
+		violations = append(violations,
+			checkNoIfErrInTryCatch(
+				p.fset, p.f, aliases,
+				cfg.AllowTryCatchIfErrDirective, nil,
+			)...)
+	}
+	return violations, nil
+}
+
+// RequireNoIfErrInTryCatch runs CheckNoIfErrInTryCatch and fails r on
+// every violation or scan error.
+func RequireNoIfErrInTryCatch(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckNoIfErrInTryCatch(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
+}
+
+// CheckSafePrintf scans cfg.Roots and returns every IO.Printf call
+// whose literal or package-local constant format string has no real
+// verb. cfg.AllowUnsafePrintfDirective exempts a function (defaults
+// to DefaultAllowUnsafePrintfDirective).
+func CheckSafePrintf(cfg Config) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	pkgConst := buildPkgConsts(parsed)
+	var violations []Violation
+	for _, p := range parsed {
+		aliases := ioAliases(p.f)
+		if len(aliases) == 0 {
+			continue
+		}
+		consts := pkgConst[pkgKey(p.fset, p.f)]
+		violations = append(violations,
+			checkSafePrintf(
+				p.fset, p.f, aliases,
+				cfg.AllowUnsafePrintfDirective, consts,
+			)...)
+	}
+	return violations, nil
+}
+
+// RequireSafePrintf runs CheckSafePrintf and fails r on every
+// violation or scan error.
+func RequireSafePrintf(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckSafePrintf(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
+}
+
+// ModuleRoot walks up from the test working directory until it finds
+// a directory containing go.mod, returning that path. It fatals r when
+// go.mod cannot be found, so a wired gate test fails fast instead of
+// silently scanning the wrong tree. Use it to make a gate's Roots
+// resolve the whole module regardless of which package the test lives
+// in. Custom Reporter implementations that do not terminate on
+// Fatalf get an empty-string return after the loop.
+func ModuleRoot(r Reporter) string {
+	r.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		r.Fatalf("pipelinecheck: getwd: %v", err)
+		return ""
+	}
+	for {
+		if _, err := os.Stat(
+			filepath.Join(dir, "go.mod"),
+		); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			r.Fatalf(
+				"pipelinecheck: go.mod not found walking up from %s",
+				dir,
+			)
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // Require runs Check and fails r on every violation or scan error.
@@ -163,6 +303,12 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.AllowAppliedSeedDirective == "" {
 		cfg.AllowAppliedSeedDirective = DefaultAllowAppliedSeedDirective
+	}
+	if cfg.AllowTryCatchIfErrDirective == "" {
+		cfg.AllowTryCatchIfErrDirective = DefaultAllowTryCatchIfErrDirective
+	}
+	if cfg.AllowUnsafePrintfDirective == "" {
+		cfg.AllowUnsafePrintfDirective = DefaultAllowUnsafePrintfDirective
 	}
 	return cfg
 }
@@ -209,9 +355,10 @@ func nonTestGoFiles(dir string) ([]string, error) {
 
 // isSkippedDir reports whether to prune a directory during the walk.
 // Dot-dirs (.git, .github), vendor, testdata, and _-prefixed dirs are
-// pruned; the walk root "." is not.
+// pruned. The walk roots "." and ".." are NOT pruned (".." starts
+// with "." but is a legitimate parent-dir root).
 func isSkippedDir(name string) bool {
-	if name == "." {
+	if name == "." || name == ".." {
 		return false
 	}
 	if strings.HasPrefix(name, ".") || name == "vendor" {
@@ -220,32 +367,73 @@ func isSkippedDir(name string) bool {
 	return name == "testdata" || strings.HasPrefix(name, "_")
 }
 
-func checkFileOnDisk(
-	cfg Config,
-	file string,
-) ([]Violation, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(
-		fset,
-		file,
-		nil,
-		parser.ParseComments,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", file, err)
-	}
-	return checkFile(fset, f, cfg), nil
+// parsedFile is a parsed non-test .go file with its token.FileSet.
+type parsedFile struct {
+	fset *token.FileSet
+	f    *ast.File
 }
 
-// checkFile inspects a parsed file and returns violations. Tests call
-// it directly with in-memory parse results.
+// parseAll parses every non-test .go file under cfg.Roots once and
+// returns them in scan order. It deduplicates paths across roots.
+func parseAll(cfg Config) ([]parsedFile, error) {
+	seen := make(map[string]bool)
+	var out []parsedFile
+	for _, root := range dedupeRoots(cfg.Roots) {
+		files, err := nonTestGoFiles(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			if seen[file] {
+				continue
+			}
+			seen[file] = true
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(
+				fset,
+				file,
+				nil,
+				parser.ParseComments,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"parse %s: %w", file, err,
+				)
+			}
+			out = append(out, parsedFile{fset, f})
+		}
+	}
+	return out, nil
+}
+
+// buildPkgConsts groups parsed files by package identity and
+// resolves each package's string constants once, returning pkgKey ->
+// name -> value.
+func buildPkgConsts(
+	parsed []parsedFile,
+) map[string]map[string]string {
+	pkgFiles := make(map[string][]*ast.File)
+	for _, p := range parsed {
+		k := pkgKey(p.fset, p.f)
+		pkgFiles[k] = append(pkgFiles[k], p.f)
+	}
+	out := make(map[string]map[string]string, len(pkgFiles))
+	for k, fs := range pkgFiles {
+		out[k] = pkgConsts(fs)
+	}
+	return out
+}
+
+// checkFile inspects a parsed file and returns entrypoint-rule
+// violations (handoff and, when RequirePointFreeSeed is set,
+// applied-seed). Tests call it directly with in-memory parse results.
 func checkFile(
 	fset *token.FileSet,
 	f *ast.File,
 	cfg Config,
 ) []Violation {
-	aliases := functionAliases(f)
-	if len(aliases) == 0 {
+	fnAliases := functionAliases(f)
+	if len(fnAliases) == 0 {
 		return nil
 	}
 	var violations []Violation
@@ -255,7 +443,13 @@ func checkFile(
 			!cfg.IsEntrypoint(fn.Name.Name) {
 			return true
 		}
-		appendFuncViolations(&violations, fset, fn, aliases, cfg)
+		appendFuncViolations(
+			&violations,
+			fset,
+			fn,
+			fnAliases,
+			cfg,
+		)
 		return true
 	})
 	return violations
@@ -365,7 +559,7 @@ func exemptionStatus(
 	fn *ast.FuncDecl,
 	directive string,
 ) exemption {
-	if fn.Doc == nil {
+	if fn == nil || fn.Doc == nil {
 		return notExempt
 	}
 	for _, c := range fn.Doc.List {
@@ -406,15 +600,21 @@ func stripComment(s string) string {
 // fp-go function package in this file. A file may import it under a
 // custom alias or the default package name "function". A blank import
 // (_) contributes nothing.
-func functionAliases(f *ast.File) map[string]bool {
+// importAliasesFor returns the set of import aliases that resolve to
+// pkgPath in f. A file may import a package under a custom alias or
+// the default package name; a blank import (_) contributes nothing.
+func importAliasesFor(
+	f *ast.File,
+	pkgPath string,
+) map[string]bool {
 	aliases := make(map[string]bool)
 	for _, imp := range f.Imports {
 		path := strings.Trim(imp.Path.Value, `"`)
-		if path != FunctionPkgPath {
+		if path != pkgPath {
 			continue
 		}
 		if imp.Name == nil {
-			aliases["function"] = true
+			aliases[filepath.Base(path)] = true
 			continue
 		}
 		if imp.Name.Name == "_" {
@@ -423,6 +623,87 @@ func functionAliases(f *ast.File) map[string]bool {
 		aliases[imp.Name.Name] = true
 	}
 	return aliases
+}
+
+// functionAliases returns aliases for the fp-go function package.
+func functionAliases(f *ast.File) map[string]bool {
+	return importAliasesFor(f, FunctionPkgPath)
+}
+
+// ioeitherAliases returns aliases for the fp-go IOEither package.
+func ioeitherAliases(f *ast.File) map[string]bool {
+	return importAliasesFor(f, IOEitherPkgPath)
+}
+
+// ioAliases returns aliases for the fp-go IO package.
+func ioAliases(f *ast.File) map[string]bool {
+	return importAliasesFor(f, IOPkgPath)
+}
+
+// enclosingFuncName returns the name of the FuncDecl containing pos.
+// When pos is at package (top-level) scope, it returns "<package>" so
+// package-scope violations are attributed consistently.
+func enclosingFuncName(f *ast.File, pos token.Pos) string {
+	var match string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if fn.Pos() <= pos && pos <= fn.End() {
+			match = fn.Name.Name
+		}
+		return true
+	})
+	if match == "" {
+		return "<package>"
+	}
+	return match
+}
+
+// funcDeclFor returns the *ast.FuncDecl named name in f, or nil.
+func funcDeclFor(f *ast.File, name string) *ast.FuncDecl {
+	if name == "" {
+		return nil
+	}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == name {
+			return fn
+		}
+	}
+	return nil
+}
+
+// exemptionFor resolves the exemption status for the function enclosing
+// pos. When the directive is present but lacks a reason it appends a
+// "directive requires a non-empty reason" violation to out (once per
+// function, tracked in reported) and returns exempt so the caller
+// suppresses the underlying rule violation.
+func exemptionFor(
+	out *[]Violation,
+	fset *token.FileSet,
+	f *ast.File,
+	fnName string,
+	directive string,
+	reported map[string]bool,
+) exemption {
+	status := exemptionStatus(funcDeclFor(f, fnName), directive)
+	if status != directiveWithoutReason {
+		return status
+	}
+	if !reported[fnName] {
+		reported[fnName] = true
+		if fn := funcDeclFor(f, fnName); fn != nil {
+			*out = append(*out, Violation{
+				Position: fset.Position(fn.Pos()),
+				Function: fnName,
+				Message: directive +
+					" directive requires a non-empty reason",
+			})
+		}
+	}
+	return exempt // suppress the underlying violation
 }
 
 // entrypointParams returns the set of named parameter identifiers of
