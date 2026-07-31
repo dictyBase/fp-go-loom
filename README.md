@@ -8,7 +8,7 @@ Reusable [fp-go v2](https://github.com/IBM/fp-go) combinators — predicates,
 ord/eq instances, parse helpers, option pattern-matching, and IOEither/Either
 bridges. Woven on top of fp-go v2; importable by any Go project.
 
-## Contents
+## Table of Contents
 
 - [Prerequisites](#prerequisites)
 - [Install](#install)
@@ -20,6 +20,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
   - [IOEither bridge](#ioeither-bridge)
   - [Option pattern matching](#option-pattern-matching)
   - [Predicates](#predicates)
+  - [Pipeline and style checks](#pipeline-and-style-checks)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -55,7 +56,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `strutils` | `JoinStrings` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckSafePrintf`, `RequireSafePrintf`, `FunctionPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowUnsafePrintfDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `FunctionPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -302,6 +303,27 @@ func TestSafePrintf(t *testing.T) {
 ```
 
 Opt out with `// fp-go:allow-unsafe-printf <reason>`.
+
+#### Redundant-Fold rule
+
+`RequireNoRedundantFold` flags `E.Fold` / `E.Match` calls whose Right
+(success) arm discards its argument by returning nil. That shape is
+"extract the Left error, return nil on Right" — the long form of
+`E.ToError[A]`. Two discard shapes are detected: an anonymous func
+whose body is a single `return nil`, and a function-package
+`Constant*` combinator wrapping nil or a `T(nil)` conversion. Reserve
+`Fold` for the case where both arms produce a real value from their
+input (durable rule 10).
+
+```go
+func TestNoRedundantFold(t *testing.T) {
+	pipelinecheck.RequireNoRedundantFold(
+		t, pipelinecheck.Config{Roots: []string{"."}},
+	)
+}
+```
+
+Opt out with `// fp-go:allow-redundant-fold <reason>`.
 
 ## Pipelines
 
