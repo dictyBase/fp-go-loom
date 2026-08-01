@@ -55,6 +55,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/array` | `IsNonEmpty`, `MinLen`, `MaxLen`, `LenEq` |
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
+| `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings` |
 | `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `FunctionPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective` |
 
@@ -220,6 +221,21 @@ predstrings.HasSuffix(".go")("hello.go")               // true
 predstrings.ContainsRuneClass(unicode.IsUpper)("Hello") // true
 predstrings.HasAtSign("user@example.com")               // true
 predstrings.StrLenBetween(3, 5)("hello")                // true — inclusive
+```
+
+File predicates (`predicate/fs`): atomic predicates on `fs.FileInfo`
+plus generic factories that lift them onto a state type:
+
+```go
+import predfs "github.com/dictyBase/fp-go-loom/predicate/fs"
+
+// atomic + P.ContraMap + any extractor (field lambda, no lens)
+var isDirInfo = F.Pipe1(predfs.IsDirInfo, P.ContraMap(func(s stat) fs.FileInfo {
+	return s.info
+}))
+
+// factory + lens getter: no lambda, extractor comes from the lens
+var isDir = predfs.IsDir(fileInfoLens.Get)
 ```
 
 ### Pipeline and style checks
