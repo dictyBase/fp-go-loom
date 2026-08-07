@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Six rules are available via dedicated entry points:
+// AST checks. Eight rules are available via dedicated entry points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
 //     single-step F.Pipe1(seed, namedFn) that delegates the whole
@@ -24,9 +24,15 @@
 //     pre-bound P.Fold and apply the predicate at the pipeline call
 //     site. Config.RequirePointFreeBranching also enables it through
 //     Check/Require.
+//  7. Fixed-root file mapping (CheckNoHandRolledFileJoinInArrayMap):
+//     filepath path construction inside an fp-go array.Map mapper.
+//     Use one flipped FILE.Join mapper instead.
+//  8. Non-raw TryCatch work (CheckNoNonRawTryCatchCallback): clear
+//     error wrapping, lens setters, or success projection inside an
+//     IOE.TryCatchError callback. Keep TryCatchError raw.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 6 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 8 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
 // anywhere.
 //
@@ -39,6 +45,8 @@
 //	// fp-go:allow-unsafe-printf <reason>
 //	// fp-go:allow-redundant-fold <reason>
 //	// fp-go:allow-bare-if <reason>
+//	// fp-go:allow-hand-rolled-file-join <reason>
+//	// fp-go:allow-non-raw-trycatch <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -53,6 +61,22 @@
 // meaningful to fmt.Errorf). Redundant-Fold inspects the Right arm of
 // E.Fold/E.Match (Either only, not IOE.Fold); a Constant* combinator
 // wrapping a non-nil value is a legitimate fold and is not flagged.
+//
+// Fixed-root mapping resolves github.com/IBM/fp-go/v2/array and
+// path/filepath imports by canonical path. It only inspects function
+// literals passed directly to array.Map, and does not require a
+// particular root variable name or Pipe arity.
+//
+// Non-raw TryCatch analysis resolves github.com/IBM/fp-go/v2/ioeither
+// by canonical path. It flags only fmt.Errorf, selector calls named
+// Set, and return expressions whose first result is a selector. It
+// does not flag arbitrary nested SDK/helper calls, named callbacks,
+// or require later MapLeft/Map stages. Its setter heuristic recognizes
+// receiver names containing lens or ending in optic; arbitrary SDK
+// Set methods remain outside this narrow syntax-only rule.
+// Both rules are syntax-only;
+// dot imports and shadowed identifiers retain normal syntax-only
+// limitations.
 //
 // Point-Free Branching recognizes canonical function Pipe*/Flow* calls
 // plus Map, Chain, and ChainFirst from fp-go Either, IO, IOEither, and
@@ -79,6 +103,15 @@ import (
 
 // FunctionPkgPath is the canonical fp-go function-package import path.
 const FunctionPkgPath = "github.com/IBM/fp-go/v2/function"
+
+// ArrayPkgPath is the canonical fp-go array-package import path.
+const ArrayPkgPath = "github.com/IBM/fp-go/v2/array"
+
+// FilepathPkgPath is the standard-library filepath import path.
+const FilepathPkgPath = "path/filepath"
+
+// FmtPkgPath is the standard-library fmt import path.
+const FmtPkgPath = "fmt"
 
 // DefaultAllowDirective is the doc-comment marker that exempts a
 // function from the handoff rule when followed by a non-empty reason.
@@ -108,6 +141,14 @@ const OptionPkgPath = "github.com/IBM/fp-go/v2/option"
 // DefaultAllowTryCatchIfErrDirective exempts a function from the
 // TryCatch-if-err rule when followed by a non-empty reason.
 const DefaultAllowTryCatchIfErrDirective = "fp-go:allow-trycatch-iferr"
+
+// DefaultAllowHandRolledFileJoinDirective exempts a function from the
+// fixed-root file-join rule when followed by a non-empty reason.
+const DefaultAllowHandRolledFileJoinDirective = "fp-go:allow-hand-rolled-file-join"
+
+// DefaultAllowNonRawTryCatchDirective exempts a function from the
+// non-raw TryCatch rule when followed by a non-empty reason.
+const DefaultAllowNonRawTryCatchDirective = "fp-go:allow-non-raw-trycatch"
 
 // DefaultAllowUnsafePrintfDirective exempts a function from the
 // safe-Printf rule when followed by a non-empty reason.
@@ -159,6 +200,16 @@ type Config struct {
 	// TryCatch-if-err rule (used by CheckNoIfErrInTryCatch).
 	// Defaults to DefaultAllowTryCatchIfErrDirective when empty.
 	AllowTryCatchIfErrDirective string
+
+	// AllowHandRolledFileJoinDirective exempts a function from the
+	// fixed-root file-join rule. Defaults to
+	// DefaultAllowHandRolledFileJoinDirective.
+	AllowHandRolledFileJoinDirective string
+
+	// AllowNonRawTryCatchDirective exempts a function from the
+	// non-raw TryCatch rule. Defaults to
+	// DefaultAllowNonRawTryCatchDirective.
+	AllowNonRawTryCatchDirective string
 
 	// AllowUnsafePrintfDirective exempts a function from the
 	// safe-Printf rule (used by CheckSafePrintf).
@@ -251,6 +302,48 @@ func RequireBareIf(r Reporter, cfg Config) {
 }
 
 // CheckNoIfErrInTryCatch scans cfg.Roots and returns every
+// CheckNoHandRolledFileJoinInArrayMap scans direct fp-go array.Map
+// function-literal mappers for filepath.Join or filepath.FromSlash.
+// Imports are resolved by canonical path, and
+// cfg.AllowHandRolledFileJoinDirective accepts a reasoned function
+// opt-out. Use one flipped FILE.Join mapper instead.
+func CheckNoHandRolledFileJoinInArrayMap(
+	cfg Config,
+) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var violations []Violation
+	for _, p := range parsed {
+		violations = append(
+			violations,
+			checkNoHandRolledFileJoin(
+				p.fset,
+				p.f,
+				cfg.AllowHandRolledFileJoinDirective,
+			)...)
+	}
+	return violations, nil
+}
+
+// RequireNoHandRolledFileJoinInArrayMap runs the fixed-root gate.
+func RequireNoHandRolledFileJoinInArrayMap(
+	r Reporter,
+	cfg Config,
+) {
+	r.Helper()
+	vs, err := CheckNoHandRolledFileJoinInArrayMap(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
+}
+
+// CheckNoIfErrInTryCatch scans cfg.Roots and returns every
 // `if err != nil` / `if nil != err` inside an IOE.TryCatchError
 // callback literal. cfg.AllowTryCatchIfErrDirective exempts a
 // function (defaults to DefaultAllowTryCatchIfErrDirective).
@@ -275,6 +368,45 @@ func CheckNoIfErrInTryCatch(
 			)...)
 	}
 	return violations, nil
+}
+
+// CheckNoNonRawTryCatchCallback scans IOE.TryCatchError callback
+// literals for clear wrapping, lens-setter, or success-projection work.
+func CheckNoNonRawTryCatchCallback(
+	cfg Config,
+) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var violations []Violation
+	for _, p := range parsed {
+		aliases := ioeitherAliases(p.f)
+		if len(aliases) == 0 {
+			continue
+		}
+		violations = append(violations,
+			checkNoNonRawTryCatchCallback(
+				p.fset,
+				p.f,
+				aliases,
+				cfg.AllowNonRawTryCatchDirective,
+			)...)
+	}
+	return violations, nil
+}
+
+// RequireNoNonRawTryCatchCallback runs the non-raw TryCatch gate.
+func RequireNoNonRawTryCatchCallback(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckNoNonRawTryCatchCallback(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
 }
 
 // RequireNoIfErrInTryCatch runs CheckNoIfErrInTryCatch and fails r on
@@ -431,19 +563,25 @@ func withDefaults(cfg Config) Config {
 	if cfg.AllowAppliedSeedDirective == "" {
 		cfg.AllowAppliedSeedDirective = DefaultAllowAppliedSeedDirective
 	}
-	if cfg.AllowTryCatchIfErrDirective == "" {
-		cfg.AllowTryCatchIfErrDirective = DefaultAllowTryCatchIfErrDirective
-	}
-	if cfg.AllowUnsafePrintfDirective == "" {
-		cfg.AllowUnsafePrintfDirective = DefaultAllowUnsafePrintfDirective
-	}
-	if cfg.AllowRedundantFoldDirective == "" {
-		cfg.AllowRedundantFoldDirective = DefaultAllowRedundantFoldDirective
-	}
-	if cfg.AllowBareIfDirective == "" {
-		cfg.AllowBareIfDirective = DefaultAllowBareIfDirective
-	}
+	applyDefault(&cfg.AllowTryCatchIfErrDirective,
+		DefaultAllowTryCatchIfErrDirective)
+	applyDefault(&cfg.AllowHandRolledFileJoinDirective,
+		DefaultAllowHandRolledFileJoinDirective)
+	applyDefault(&cfg.AllowNonRawTryCatchDirective,
+		DefaultAllowNonRawTryCatchDirective)
+	applyDefault(&cfg.AllowUnsafePrintfDirective,
+		DefaultAllowUnsafePrintfDirective)
+	applyDefault(&cfg.AllowRedundantFoldDirective,
+		DefaultAllowRedundantFoldDirective)
+	applyDefault(&cfg.AllowBareIfDirective,
+		DefaultAllowBareIfDirective)
 	return cfg
+}
+
+func applyDefault(target *string, value string) {
+	if *target == "" {
+		*target = value
+	}
 }
 
 func dedupeRoots(roots []string) []string {
