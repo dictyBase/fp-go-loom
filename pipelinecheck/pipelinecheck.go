@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Five rules are available via dedicated entry points:
+// AST checks. Six rules are available via dedicated entry points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
 //     single-step F.Pipe1(seed, namedFn) that delegates the whole
@@ -19,10 +19,16 @@
 //     nil. Such a Fold is equivalent to E.ToError; use E.ToError[A]
 //     (or F.Flow2(E.ToError[A], leftTransform)) instead of the
 //     discard arm.
+//  6. Point-Free Branching (CheckBareIf): a bare if inside an fp-go
+//     Pipe/Flow or transformation callback. Extract branches to a
+//     pre-bound P.Fold and apply the predicate at the pipeline call
+//     site. Config.RequirePointFreeBranching also enables it through
+//     Check/Require.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3, 4, and 5 apply to
-// all functions, since TryCatch, Printf, and Fold appear anywhere.
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 6 apply to
+// all functions, since TryCatch, Printf, Fold, and callbacks appear
+// anywhere.
 //
 // Opt a function out of a rule with the matching doc-comment directive,
 // each requiring a non-empty reason:
@@ -32,6 +38,7 @@
 //	// fp-go:allow-trycatch-iferr <reason>
 //	// fp-go:allow-unsafe-printf <reason>
 //	// fp-go:allow-redundant-fold <reason>
+//	// fp-go:allow-bare-if <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -46,6 +53,12 @@
 // meaningful to fmt.Errorf). Redundant-Fold inspects the Right arm of
 // E.Fold/E.Match (Either only, not IOE.Fold); a Constant* combinator
 // wrapping a non-nil value is a legitimate fold and is not flagged.
+//
+// Point-Free Branching recognizes canonical function Pipe*/Flow* calls
+// plus Map, Chain, and ChainFirst from fp-go Either, IO, IOEither, and
+// Option. It does not inspect TryCatchError callbacks, which may contain
+// legitimate imperative raw-effect control flow. Its public entry points
+// are CheckBareIf and RequireBareIf.
 //
 // This package walks Go ASTs imperatively. ast.Inspect's callback model
 // does not fit fp-go pipe composition, so the walk layers are imperative
@@ -85,8 +98,12 @@ const IOEitherPkgPath = "github.com/IBM/fp-go/v2/ioeither"
 const IOPkgPath = "github.com/IBM/fp-go/v2/io"
 
 // EitherPkgPath is the canonical fp-go either-package import path,
-// used by the redundant-Fold rule.
+// used by the redundant-Fold rule and point-free branching rule.
 const EitherPkgPath = "github.com/IBM/fp-go/v2/either"
+
+// OptionPkgPath is the canonical fp-go option-package import path,
+// used by the point-free branching rule.
+const OptionPkgPath = "github.com/IBM/fp-go/v2/option"
 
 // DefaultAllowTryCatchIfErrDirective exempts a function from the
 // TryCatch-if-err rule when followed by a non-empty reason.
@@ -99,6 +116,10 @@ const DefaultAllowUnsafePrintfDirective = "fp-go:allow-unsafe-printf"
 // DefaultAllowRedundantFoldDirective exempts a function from the
 // redundant-Fold rule when followed by a non-empty reason.
 const DefaultAllowRedundantFoldDirective = "fp-go:allow-redundant-fold"
+
+// DefaultAllowBareIfDirective exempts a function from the point-free
+// branching rule when followed by a non-empty reason.
+const DefaultAllowBareIfDirective = "fp-go:allow-bare-if"
 
 // Reporter is the minimal subset of testing.TB that Require needs.
 // *testing.T and *testing.B satisfy it implicitly; tests may pass a
@@ -148,6 +169,14 @@ type Config struct {
 	// redundant-Fold rule (used by CheckRedundantFold).
 	// Defaults to DefaultAllowRedundantFoldDirective when empty.
 	AllowRedundantFoldDirective string
+
+	// RequirePointFreeBranching enables the bare-if rule for fp-go
+	// pipeline callbacks. Defaults to false.
+	RequirePointFreeBranching bool
+
+	// AllowBareIfDirective exempts a function from the bare-if rule.
+	// Defaults to DefaultAllowBareIfDirective when empty.
+	AllowBareIfDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -169,8 +198,10 @@ func (v Violation) String() string {
 
 // Check scans cfg.Roots and returns every entrypoint-rule violation
 // (handoff and, when RequirePointFreeSeed is set, applied-seed) that
-// lacks a valid exemption. It does NOT run the TryCatch or Printf
-// rules; use CheckNoIfErrInTryCatch / CheckSafePrintf for those.
+// lacks a valid exemption. When RequirePointFreeBranching is set, it
+// also scans fp-go callbacks for bare if statements. It does NOT run
+// the TryCatch or Printf rules; use CheckNoIfErrInTryCatch /
+// CheckSafePrintf for those.
 func Check(cfg Config) ([]Violation, error) {
 	cfg = withDefaults(cfg)
 	parsed, err := parseAll(cfg)
@@ -183,6 +214,40 @@ func Check(cfg Config) ([]Violation, error) {
 			checkFile(p.fset, p.f, cfg)...)
 	}
 	return violations, nil
+}
+
+// CheckBareIf scans cfg.Roots and returns every bare if statement
+// inside a recognized fp-go pipeline or transformation callback.
+// cfg.AllowBareIfDirective exempts a function (defaults to
+// DefaultAllowBareIfDirective). TryCatchError callbacks are excluded.
+func CheckBareIf(cfg Config) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var violations []Violation
+	for _, p := range parsed {
+		violations = append(violations, checkBareIf(
+			p.fset,
+			p.f,
+			cfg.AllowBareIfDirective,
+		)...)
+	}
+	return violations, nil
+}
+
+// RequireBareIf runs CheckBareIf and fails r on every violation or
+// scan error.
+func RequireBareIf(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckBareIf(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
 }
 
 // CheckNoIfErrInTryCatch scans cfg.Roots and returns every
@@ -338,6 +403,7 @@ func ModuleRoot(r Reporter) string {
 }
 
 // Require runs Check and fails r on every violation or scan error.
+// Set Config.RequirePointFreeBranching to include the bare-if rule.
 func Require(r Reporter, cfg Config) {
 	r.Helper()
 	violations, err := Check(cfg)
@@ -373,6 +439,9 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.AllowRedundantFoldDirective == "" {
 		cfg.AllowRedundantFoldDirective = DefaultAllowRedundantFoldDirective
+	}
+	if cfg.AllowBareIfDirective == "" {
+		cfg.AllowBareIfDirective = DefaultAllowBareIfDirective
 	}
 	return cfg
 }
@@ -496,11 +565,18 @@ func checkFile(
 	f *ast.File,
 	cfg Config,
 ) []Violation {
+	var violations []Violation
+	if cfg.RequirePointFreeBranching {
+		violations = append(violations, checkBareIf(
+			fset,
+			f,
+			cfg.AllowBareIfDirective,
+		)...)
+	}
 	fnAliases := functionAliases(f)
 	if len(fnAliases) == 0 {
-		return nil
+		return violations
 	}
-	var violations []Violation
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if !ok || fn.Body == nil ||
