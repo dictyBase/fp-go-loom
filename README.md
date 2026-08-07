@@ -57,7 +57,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `FunctionPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -312,24 +312,47 @@ Opt out only for a documented exception:
 `// fp-go:allow-bare-if <reason>`. An empty reason does not suppress
 violations.
 
-#### TryCatch raw-effect rule
+#### Fixed-root file mapping rule
 
-`RequireNoIfErrInTryCatch` flags `if err != nil` / `if nil != err` inside
-an `IOE.TryCatchError` callback literal. `TryCatchError` should hold the
-raw SDK effect; projection and wrapping belong in `IOE.MapLeft` /
+`RequireNoHandRolledFileJoinInArrayMap` flags `filepath.Join` or
+`filepath.FromSlash` path construction inside a function literal passed
+as an fp-go `array.Map` mapper. The rule resolves imports by canonical
+path, so custom aliases work, while ordinary joins outside the mapper
+remain clean. Use one flipped `FILE.Join` mapper instead:
+
+```go
+root := F.Pipe1(st.Path, F.Flip(FILE.Join))
+IOE.Map[error](A.Map(root))
+```
+
+The gate does not require exact variable names or `Pipe` arity. Opt out
+only with `// fp-go:allow-hand-rolled-file-join <reason>`.
+
+#### TryCatch raw-effect rules
+
+`RequireNoIfErrInTryCatch` flags `if err != nil` / `if nil != err`
+inside an `IOE.TryCatchError` callback literal. `TryCatchError` should
+hold the raw SDK effect; projection and wrapping belong in `IOE.MapLeft` /
 `IOE.Map`. The rule applies to **all** functions, not just entrypoints.
 Resolve the `IOEither` import alias automatically (`IOE`, `ioeither`,
 or a custom alias).
 
+`RequireNoNonRawTryCatchCallback` complements it by flagging clear
+`fmt.Errorf` wrapping, `.Set(...)` lens-setter calls, and selector-based
+success projection inside the callback. It does not flag arbitrary helper
+or SDK calls, and it does not require later `MapLeft` or `Map` stages.
+Opt out with `// fp-go:allow-non-raw-trycatch <reason>`.
+
 ```go
-func TestNoIfErrInTryCatch(t *testing.T) {
-	pipelinecheck.RequireNoIfErrInTryCatch(t, pipelinecheck.Config{
+func TestNoNonRawTryCatchCallback(t *testing.T) {
+	pipelinecheck.RequireNoNonRawTryCatchCallback(t, pipelinecheck.Config{
 		Roots: []string{"."},
 	})
 }
 ```
 
-Opt out with `// fp-go:allow-trycatch-iferr <reason>`.
+Opt out of the error-branch rule with
+`// fp-go:allow-trycatch-iferr <reason>`.
 
 #### Safe-Printf rule
 

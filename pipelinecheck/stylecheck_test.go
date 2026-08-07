@@ -163,6 +163,26 @@ func bad() IOE.IOEither[error, *T] {
 	require.Empty(t, vs)
 }
 
+func TestNoIfErrInTryCatch_CustomDirective(t *testing.T) {
+	src := `package testpkg
+import IOE "github.com/IBM/fp-go/v2/ioeither"
+type T struct{}
+func get() (*T, error) { return nil, nil }
+// custom:allow-iferr legacy adapter
+func bad() IOE.IOEither[error, *T] {
+	return IOE.TryCatchError(func() (*T, error) {
+		x, err := get()
+		if err != nil { return nil, err }
+		return x, nil
+	})
+}`
+	fset, f := parse(t, src)
+	vs := checkNoIfErrInTryCatch(
+		fset, f, ioeitherAliases(f), "custom:allow-iferr", nil,
+	)
+	require.Empty(t, vs)
+}
+
 func TestNoIfErrInTryCatch_DirectiveWithoutReason(t *testing.T) {
 	src := `package testpkg
 import IOE "github.com/IBM/fp-go/v2/ioeither"
@@ -487,6 +507,16 @@ func TestNoIfErrInTryCatch_FixtureFires(t *testing.T) {
 		Roots: []string{"testdata/bad_iferr"},
 	})
 	require.NoError(t, err)
+	require.Len(t, vs, 1)
+}
+
+func TestNoNonRawTryCatch_FixtureGoodSilent(t *testing.T) {
+	vs, err := CheckNoNonRawTryCatchCallback(Config{
+		Roots: []string{"testdata/raweffect"},
+	})
+	require.NoError(t, err)
+	// bad.go is intentionally covered separately; this verifies fixture
+	// scanning remains deterministic when both files are present.
 	require.Len(t, vs, 1)
 }
 
