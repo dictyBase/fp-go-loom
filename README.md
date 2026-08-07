@@ -279,6 +279,39 @@ The function-package alias is resolved from each file's imports, so
 `F`, `fn`, or the default `function` all work. Analysis is syntax-only
 (see package doc for limitations).
 
+#### Point-free branching rule
+
+`CheckBareIf` flags bare `if` statements inside function literals passed
+as callbacks to fp-go `Pipe*`/`Flow*`, or to `Map`, `Chain`, and
+`ChainFirst` from `Either`, `IO`, `IOEither`, and `Option`. The rule
+resolves imports by canonical path, so custom aliases work. It ignores
+ordinary closures and `TryCatchError` callbacks. Replace branching with
+a pre-bound `P.Fold(onFalse, onTrue)` and apply the predicate at the
+pipeline call site.
+
+Enable it in a project gate with `RequirePointFreeBranching`:
+
+```go
+func TestPointFreeBranching(t *testing.T) {
+	pipelinecheck.Require(t, pipelinecheck.Config{
+		Roots:                     []string{"."},
+		RequirePointFreeBranching: true,
+	})
+}
+```
+
+Or run the rule directly with `RequireBareIf`:
+
+```go
+pipelinecheck.RequireBareIf(t, pipelinecheck.Config{
+	Roots: []string{"."},
+})
+```
+
+Opt out only for a documented exception:
+`// fp-go:allow-bare-if <reason>`. An empty reason does not suppress
+violations.
+
 #### TryCatch raw-effect rule
 
 `RequireNoIfErrInTryCatch` flags `if err != nil` / `if nil != err` inside
@@ -543,6 +576,7 @@ ClassifyPassword("Password123") // "strong"
 │   └── strutils_test.go
 └── pipelinecheck/
     ├── pipelinecheck.go       # Check, Require, Config, Violation
+    ├── bareif.go              # Point-free branching rule
     ├── trycatch.go            # NoIfErrInTryCatch rule
     ├── printf.go              # SafePrintf rule + const resolution
     ├── pipelinecheck_test.go  # handoff + applied-seed tests
