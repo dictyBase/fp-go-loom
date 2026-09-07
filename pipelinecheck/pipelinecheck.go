@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Eight rules are available via dedicated entry points:
+// AST checks. Ten rules are available via dedicated entry points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
 //     single-step F.Pipe1(seed, namedFn) that delegates the whole
@@ -30,11 +30,20 @@
 //  8. Non-raw TryCatch work (CheckNoNonRawTryCatchCallback): clear
 //     error wrapping, lens setters, or success projection inside an
 //     IOE.TryCatchError callback. Keep TryCatchError raw.
+//  9. Duplicate terminal fold (CheckTerminalEffect): a Fold or Match
+//     whose two arms both reach a Config.TerminalFunctions entry, so
+//     the irreversible effect is invoked once per branch.
+//  10. Recovery after terminal (CheckTerminalEffect): an IOE.OrElse
+//     placed after a terminal step in the same F.PipeN, so a failure
+//     inside the effect re-enters the recovery arm and executes it
+//     twice. Converge both branches on one description value, then
+//     execute once.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 8 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 10 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
-// anywhere.
+// anywhere. Rules 9 and 10 are additionally inert until
+// Config.TerminalFunctions names the project's terminal effects.
 //
 // Opt a function out of a rule with the matching doc-comment directive,
 // each requiring a non-empty reason:
@@ -47,6 +56,8 @@
 //	// fp-go:allow-bare-if <reason>
 //	// fp-go:allow-hand-rolled-file-join <reason>
 //	// fp-go:allow-non-raw-trycatch <reason>
+//	// fp-go:allow-duplicate-terminal <reason>
+//	// fp-go:allow-recovery-after-terminal <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -83,6 +94,17 @@
 // Option. It does not inspect TryCatchError callbacks, which may contain
 // legitimate imperative raw-effect control flow. Its public entry points
 // are CheckBareIf and RequireBareIf.
+//
+// Terminal-effect analysis matches Config.TerminalFunctions by bare
+// identifier, so a method named Send matches on any receiver and an
+// unrelated function of the same name is a false positive; choose
+// distinctive names. Reachability follows at most two package-local
+// hops from a step to a terminal function, which covers a thin
+// wrapper but not longer chains, and recursion is guarded by a
+// visited set. Only F.PipeN steps are ordered; a terminal reached
+// through a variable assigned earlier in the function body is not
+// inspected. Its public entry points are CheckTerminalEffect and
+// RequireTerminalEffect.
 //
 // This package walks Go ASTs imperatively. ast.Inspect's callback model
 // does not fit fp-go pipe composition, so the walk layers are imperative
@@ -162,6 +184,15 @@ const DefaultAllowRedundantFoldDirective = "fp-go:allow-redundant-fold"
 // branching rule when followed by a non-empty reason.
 const DefaultAllowBareIfDirective = "fp-go:allow-bare-if"
 
+// DefaultAllowDuplicateTerminalDirective is the doc-comment directive
+// that exempts a function from the duplicate-terminal-fold rule.
+const DefaultAllowDuplicateTerminalDirective = "fp-go:allow-duplicate-terminal"
+
+// DefaultAllowRecoveryAfterTerminalDirective is the doc-comment
+// directive that exempts a function from the recovery-after-terminal
+// rule.
+const DefaultAllowRecoveryAfterTerminalDirective = "fp-go:allow-recovery-after-terminal"
+
 // Reporter is the minimal subset of testing.TB that Require needs.
 // *testing.T and *testing.B satisfy it implicitly; tests may pass a
 // custom stub to assert failure paths.
@@ -228,6 +259,23 @@ type Config struct {
 	// AllowBareIfDirective exempts a function from the bare-if rule.
 	// Defaults to DefaultAllowBareIfDirective when empty.
 	AllowBareIfDirective string
+
+	// TerminalFunctions names the project's terminal effects — the
+	// functions that write, send, commit or publish, and so must run
+	// exactly once per pipeline. Bare names are matched, so a method
+	// such as Send needs no receiver. The terminal-effect rules are
+	// inert while this is empty.
+	TerminalFunctions []string
+
+	// AllowDuplicateTerminalDirective exempts a function from the
+	// duplicate-terminal-fold rule. Defaults to
+	// DefaultAllowDuplicateTerminalDirective when empty.
+	AllowDuplicateTerminalDirective string
+
+	// AllowRecoveryAfterTerminalDirective exempts a function from the
+	// recovery-after-terminal rule. Defaults to
+	// DefaultAllowRecoveryAfterTerminalDirective when empty.
+	AllowRecoveryAfterTerminalDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -491,6 +539,100 @@ func CheckRedundantFold(cfg Config) ([]Violation, error) {
 
 // RequireNoRedundantFold runs CheckRedundantFold and fails r on every
 // violation or scan error.
+// CheckTerminalEffect scans cfg.Roots and returns every
+// terminal-effect violation: a Fold whose two arms both reach a
+// terminal function, and an OrElse recovery step placed after a
+// terminal step in the same F.PipeN. Both rules are inert unless
+// cfg.TerminalFunctions is set, so adding this gate to a project that
+// has not named its terminal effects reports nothing.
+func CheckTerminalEffect(cfg Config) ([]Violation, error) {
+	cfg = withDefaults(cfg)
+	terms := newTerminalSet(cfg.TerminalFunctions)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	parsed, err := parseAll(cfg)
+	if err != nil {
+		return nil, err
+	}
+	funcs := buildPkgFuncs(parsed)
+	var violations []Violation
+	for _, p := range parsed {
+		violations = append(violations, terminalFileViolations(
+			p, funcs[pkgKey(p.fset, p.f)], terms, cfg,
+		)...)
+	}
+	return violations, nil
+}
+
+// terminalFileViolations runs both terminal-effect rules over one
+// parsed file.
+func terminalFileViolations(
+	p parsedFile,
+	funcs map[string]*ast.FuncDecl,
+	terms terminalSet,
+	cfg Config,
+) []Violation {
+	var out []Violation
+	foldAliases := foldPackageAliases(p.f)
+	if len(foldAliases) > 0 {
+		out = append(out, checkDuplicateTerminalFold(
+			p.fset, p.f, foldAliases, terms, funcs,
+			cfg.AllowDuplicateTerminalDirective,
+		)...)
+	}
+	fnAliases := functionAliases(p.f)
+	if len(fnAliases) > 0 {
+		out = append(out, checkRecoveryAfterTerminal(
+			p.fset, p.f, fnAliases, terms, funcs,
+			cfg.AllowRecoveryAfterTerminalDirective,
+		)...)
+	}
+	return out
+}
+
+// foldPackageAliases is the union of the Either and IOEither import
+// aliases of a file; Fold and Match are inspected on both.
+func foldPackageAliases(f *ast.File) map[string]bool {
+	out := eitherAliases(f)
+	for alias := range ioeitherAliases(f) {
+		out[alias] = true
+	}
+	return out
+}
+
+// buildPkgFuncs groups parsed files by package identity and indexes
+// each package's top-level functions once.
+func buildPkgFuncs(
+	parsed []parsedFile,
+) map[string]map[string]*ast.FuncDecl {
+	pkgFiles := make(map[string][]*ast.File)
+	for _, p := range parsed {
+		k := pkgKey(p.fset, p.f)
+		pkgFiles[k] = append(pkgFiles[k], p.f)
+	}
+	out := make(
+		map[string]map[string]*ast.FuncDecl, len(pkgFiles),
+	)
+	for k, fs := range pkgFiles {
+		out[k] = packageFuncs(fs)
+	}
+	return out
+}
+
+// RequireTerminalEffect fails the test for every terminal-effect
+// violation found under cfg.Roots.
+func RequireTerminalEffect(r Reporter, cfg Config) {
+	r.Helper()
+	vs, err := CheckTerminalEffect(cfg)
+	if err != nil {
+		r.Fatalf("pipelinecheck: %v", err)
+	}
+	for _, v := range vs {
+		r.Errorf("%s", v)
+	}
+}
+
 func RequireNoRedundantFold(r Reporter, cfg Config) {
 	r.Helper()
 	vs, err := CheckRedundantFold(cfg)
@@ -575,6 +717,10 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowRedundantFoldDirective)
 	applyDefault(&cfg.AllowBareIfDirective,
 		DefaultAllowBareIfDirective)
+	applyDefault(&cfg.AllowDuplicateTerminalDirective,
+		DefaultAllowDuplicateTerminalDirective)
+	applyDefault(&cfg.AllowRecoveryAfterTerminalDirective,
+		DefaultAllowRecoveryAfterTerminalDirective)
 	return cfg
 }
 
