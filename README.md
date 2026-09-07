@@ -21,6 +21,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
   - [Option pattern matching](#option-pattern-matching)
   - [Predicates](#predicates)
   - [Pipeline and style checks](#pipeline-and-style-checks)
+    - [Terminal-effect rules](#terminal-effect-rules)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -396,6 +397,63 @@ func TestNoRedundantFold(t *testing.T) {
 ```
 
 Opt out with `// fp-go:allow-redundant-fold <reason>`.
+
+#### Terminal-effect rules
+
+`RequireTerminalEffect` protects the boundary where a pipeline stops
+being pure and performs an irreversible effect — a write, a send, a
+commit, a publish. Such an effect must run **exactly once** per
+request, and two shapes silently break that:
+
+1. **Duplicate terminal fold** — an `E.Fold` / `IOE.Fold` / `Match`
+   whose two arms both reach a terminal function. The effect is then
+   invoked once per branch, so the call sites drift apart, and a late
+   failure cannot be recovered without emitting a second time.
+2. **Recovery after a terminal step** — an `IOE.OrElse` positioned
+   after a terminal step inside the same `F.PipeN`. A failure raised
+   *inside* the effect sends the pipeline into the recovery arm, which
+   performs the effect again.
+
+The fix for both is the same: converge the success and failure
+branches on one description value, then execute once after the
+convergence.
+
+```go
+// flagged: recovery wraps a step that already sent
+F.Pipe2(
+	IOE.Of[error](msg),
+	IOE.Chain(encodeAndSend),
+	IOE.OrElse(recoverSend),
+)
+
+// clean: recover first, send once at the end
+F.Pipe3(
+	IOE.Of[error](msg),
+	IOE.ChainEitherK(encode),
+	IOE.OrElse(encodeFailure),
+	IOE.Chain(send),
+)
+```
+
+Both rules are **inert until the project names its terminal effects**,
+so adopting the gate cannot break an existing build:
+
+```go
+func TestTerminalEffect(t *testing.T) {
+	pipelinecheck.RequireTerminalEffect(t, pipelinecheck.Config{
+		Roots:             []string{"."},
+		TerminalFunctions: []string{"writeResponse", "send"},
+	})
+}
+```
+
+Names are matched bare, so a method such as `Send` needs no receiver.
+Reachability follows up to two package-local hops, which covers the
+common case of a thin wrapper (`respondJSON` → `writeResponse`) but
+not arbitrary call chains — the analysis stays syntax-only.
+
+Opt out with `// fp-go:allow-duplicate-terminal <reason>` or
+`// fp-go:allow-recovery-after-terminal <reason>`.
 
 ## Pipelines
 
