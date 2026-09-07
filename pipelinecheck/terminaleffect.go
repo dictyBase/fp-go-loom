@@ -250,10 +250,10 @@ func isPipeCall(
 }
 
 // recoveryAndTerminalIndex returns the argument index of the first
-// OrElse step and of the first terminal step, or -1 when absent. The
-// recovery step itself is never counted as terminal: its arm is the
-// second emission the rule exists to prevent, and reporting it as the
-// cause would point at the wrong step.
+// post-terminal OrElse step and of the first terminal step, or -1
+// when absent. The recovery step itself is never counted as terminal:
+// its arm is the second emission the rule exists to prevent, and
+// reporting it as the cause would point at the wrong step.
 func recoveryAndTerminalIndex(
 	call *ast.CallExpr,
 	terms terminalSet,
@@ -262,7 +262,7 @@ func recoveryAndTerminalIndex(
 	recovery, terminal := -1, -1
 	for i, arg := range call.Args {
 		if isRecoveryStep(arg) {
-			if recovery < 0 {
+			if recovery < 0 && terminal >= 0 {
 				recovery = i
 			}
 			continue

@@ -243,6 +243,25 @@ func good() IOE.IOEither[error, int] {
 		wantCount: 0,
 	},
 	{
+		name: "post-terminal OrElse flagged despite earlier OrElse",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+import IOE "github.com/IBM/fp-go/v2/ioeither"
+type M struct{}
+func send(m M) IOE.IOEither[error, int] { return nil }
+func recoverInput(err error) IOE.IOEither[error, int] { return nil }
+func recoverSend(err error) IOE.IOEither[error, int] { return nil }
+func bad() IOE.IOEither[error, int] {
+	return F.Pipe3(
+		IOE.Of[error](M{}),
+		IOE.OrElse(recoverInput),
+		IOE.Chain(send),
+		IOE.OrElse(recoverSend),
+	)
+}`,
+		wantCount: 1,
+	},
+	{
 		name: "pipe without recovery is clean",
 		src: `package testpkg
 import F "github.com/IBM/fp-go/v2/function"
