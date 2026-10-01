@@ -2,6 +2,7 @@ package matchopt_test
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	O "github.com/IBM/fp-go/v2/option"
@@ -232,4 +233,82 @@ func TestValidationChain(t *testing.T) {
 	t.Run("valid input yields None", func(t *testing.T) {
 		require.Equal(t, O.None[string](), validate("ok"))
 	})
+}
+
+// ============================================================================
+// Match — lazy first-match-wins dispatcher over unapplied cases
+// ============================================================================
+
+func TestMatch(t *testing.T) {
+	half := MO.Match(
+		"odd",
+		[]O.Kleisli[int, string]{
+			MO.Case(
+				func(n int) bool { return n%2 == 0 },
+				func(n int) string { return strconv.Itoa(n / 2) },
+			),
+			MO.Default(func(n int) string {
+				return "odd: " + strconv.Itoa(n)
+			}),
+		},
+	)
+
+	t.Run("first matching case wins", func(t *testing.T) {
+		require.Equal(t, "2", half(4))
+	})
+	t.Run("catch-all arm handles the rest", func(t *testing.T) {
+		require.Equal(t, "odd: 3", half(3))
+	})
+}
+
+func TestMatchSpecificBeforeGeneral(t *testing.T) {
+	classify := MO.Match(
+		"unknown",
+		[]O.Kleisli[string, string]{
+			MO.Const(
+				func(s string) bool { return strings.HasPrefix(s, "admin/") },
+				"admin",
+			),
+			MO.Const(
+				func(s string) bool { return strings.HasPrefix(s, "admin") },
+				"other-admin",
+			),
+		},
+	)
+	require.Equal(t, "admin", classify("admin/x"))
+	require.Equal(t, "other-admin", classify("admin"))
+}
+
+func TestMatchFallback(t *testing.T) {
+	m := MO.Match(
+		"fallback",
+		[]O.Kleisli[int, string]{
+			MO.Const(
+				func(n int) bool { return n < 0 },
+				"negative",
+			),
+		},
+	)
+	require.Equal(t, "negative", m(-1))
+	require.Equal(t, "fallback", m(1))
+}
+
+func TestMatchEmptyCases(t *testing.T) {
+	m := MO.Match("fallback", []O.Kleisli[int, string]{})
+	require.Equal(t, "fallback", m(1))
+}
+
+func TestMatchStopsAtFirstMatch(t *testing.T) {
+	var calls int
+	counting := func(_ int) O.Option[string] {
+		calls++
+		return O.Some("first")
+	}
+	never := func(_ int) O.Option[string] {
+		t.Error("later case must not run after a match")
+		return O.None[string]()
+	}
+	m := MO.Match("", []O.Kleisli[int, string]{counting, never})
+	require.Equal(t, "first", m(1))
+	require.Equal(t, 1, calls)
 }

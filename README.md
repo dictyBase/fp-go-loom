@@ -51,7 +51,7 @@ go get github.com/dictyBase/fp-go-loom
 | `either/parse` | `ParseInt` |
 | `eithererr` | `ConstErr` |
 | `ioeitherutils` | `ToEither` |
-| `matchopt` | `Case`, `Const`, `Default`, `Alt`, `First` |
+| `matchopt` | `Case`, `Const`, `Default`, `Alt`, `First`, `Match` |
 | `predicate/ord` | `IntOrd`, `Float64Ord`, `IntEq`, `Float64Eq`, `StringEq`, `IntBetween`, `IntBetweenInclusive`, `MinStrLen`, `MaxStrLen`, `StrLenEq`, `NotEqualF64`, `NotEqualInt`, `NotEqualStr`, `StrEq` |
 | `predicate/array` | `IsNonEmpty`, `MinLen`, `MaxLen`, `LenEq` |
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
@@ -162,6 +162,13 @@ classify(7)  // "pos"
 MO.Alt([]O.Option[int]{
     O.None[int](), O.Some(1), O.Some(2),
 }) // Some(1)
+
+// Match: lazy dispatch over unapplied cases — later cases
+// never run after a match (expensive guards stay cheap)
+numType := MO.Match("unknown", []O.Kleisli[int, string]{
+    armNeg, armZero, armPos,
+})
+numType(0) // "zero"; armPos never invoked
 ```
 
 ### Predicates
@@ -638,7 +645,7 @@ ClassifyPassword("Password123") // "strong"
 ├── ioeitherutils/
 │   └── ioeitherutils.go       # ToEither
 ├── matchopt/
-│   └── matchopt.go            # Case, Const, Default, Alt, First
+│   └── matchopt.go            # Case, Const, Default, Alt, First, Match
 ├── predicate/
 │   ├── ord/
 │   │   ├── ord.go             # IntOrd, IntBetween, MinStrLen, ...
