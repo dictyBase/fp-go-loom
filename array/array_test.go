@@ -20,7 +20,7 @@ func TestCompact(t *testing.T) {
 		require.Equal(
 			t,
 			[]string{"a", "b"},
-			arrutils.Compact[string](opts),
+			arrutils.Compact(opts),
 		)
 	})
 	t.Run("all None returns empty", func(t *testing.T) {

@@ -2,6 +2,7 @@
 package matchopt
 
 import (
+	arr "github.com/IBM/fp-go/v2/array"
 	F "github.com/IBM/fp-go/v2/function"
 	O "github.com/IBM/fp-go/v2/option"
 )
@@ -35,4 +36,27 @@ func Alt[A any](cases []O.Option[A]) O.Option[A] {
 // First returns the value of the first Some in cases, or fallback.
 func First[A any](fallback A, cases []O.Option[A]) A {
 	return F.Pipe1(Alt(cases), O.GetOrElse(F.Constant(fallback)))
+}
+
+// Match lazily dispatches input to the first matching case in order,
+// returning fallback when no case matches. Unlike First, which folds
+// already-applied options, Match applies cases itself and stops invoking
+// them at the first Some: later cases never run, so guard cost is not
+// paid past the match.
+func Match[A, B any](
+	fallback B,
+	cases []O.Kleisli[A, B],
+) func(A) B {
+	return F.Flow3(
+		F.Flip(applyCase[A, B]),
+		F.Flip(arr.FindFirstMap[O.Kleisli[A, B], B])(cases),
+		O.GetOrElse(F.Constant(fallback)),
+	)
+}
+
+// applyCase curries a Kleisli case so F.Flip can fix the input.
+func applyCase[A, B any](
+	c O.Kleisli[A, B],
+) func(A) O.Option[B] {
+	return c
 }
