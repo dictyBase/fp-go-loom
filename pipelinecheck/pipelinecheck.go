@@ -38,12 +38,19 @@
 //     inside the effect re-enters the recovery arm and executes it
 //     twice. Converge both branches on one description value, then
 //     execute once.
+//  11. Trivial delegate (RequireTrivialDelegate, or Check/Require
+//     with Config.RequireTrivialDelegate): a function whose entire
+//     body is a single pass-through call on its own parameters
+//     (func f(x State) IOE.X { return g(x) }) referenced from an
+//     F.Pipe/F.Flow chain or an IOE.* combinator argument in the
+//     same package. Call g directly at the pipeline call site.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 10 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 11 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
 // anywhere. Rules 9 and 10 are additionally inert until
-// Config.TerminalFunctions names the project's terminal effects.
+// Config.TerminalFunctions names the project's terminal effects. Rule
+// 11 is additionally inert until Config.RequireTrivialDelegate is set.
 //
 // Opt a function out of a rule with the matching doc-comment directive,
 // each requiring a non-empty reason:
@@ -58,6 +65,7 @@
 //	// fp-go:allow-non-raw-trycatch <reason>
 //	// fp-go:allow-duplicate-terminal <reason>
 //	// fp-go:allow-recovery-after-terminal <reason>
+//	// fp-go:allow-trivial-delegate <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -276,6 +284,16 @@ type Config struct {
 	// recovery-after-terminal rule. Defaults to
 	// DefaultAllowRecoveryAfterTerminalDirective when empty.
 	AllowRecoveryAfterTerminalDirective string
+
+	// RequireTrivialDelegate enables the trivial-delegate rule:
+	// single-statement pass-through wrappers referenced from fp-go
+	// pipeline combinators. Defaults to false.
+	RequireTrivialDelegate bool
+
+	// AllowTrivialDelegateDirective exempts a function from the
+	// trivial-delegate rule. Defaults to
+	// DefaultAllowTrivialDelegateDirective when empty.
+	AllowTrivialDelegateDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -311,6 +329,10 @@ func Check(cfg Config) ([]Violation, error) {
 	for _, p := range parsed {
 		violations = append(violations,
 			checkFile(p.fset, p.f, cfg)...)
+	}
+	if cfg.RequireTrivialDelegate {
+		violations = append(violations,
+			checkTrivialDelegate(parsed, cfg)...)
 	}
 	return violations, nil
 }
@@ -721,6 +743,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowDuplicateTerminalDirective)
 	applyDefault(&cfg.AllowRecoveryAfterTerminalDirective,
 		DefaultAllowRecoveryAfterTerminalDirective)
+	applyDefault(&cfg.AllowTrivialDelegateDirective,
+		DefaultAllowTrivialDelegateDirective)
 	return cfg
 }
 
