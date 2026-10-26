@@ -200,6 +200,117 @@ func runPipe(st State) IOE.IOEither[error, State] {
 		wantMsg:   "requires a non-empty reason",
 		wantFunc:  fetchWorkByShapeName,
 	},
+	{
+		name: "ignored-param wrapper in IOE.Bind flagged",
+		src: `package testpkg
+import IOE "github.com/IBM/fp-go/v2/ioeither"
+type State struct{ Client string }
+func setClient(c string) func(State) State {
+	return func(s State) State { s.Client = c; return s }
+}
+func NewClient() IOE.IOEither[error, string] {
+	return IOE.Of[error]("ok")
+}
+func createStateClient(_ State) IOE.IOEither[error, string] {
+	return NewClient()
+}
+func runPipe(st State) IOE.IOEither[error, State] {
+	return IOE.Bind(setClient, createStateClient)(IOE.Of[error](st))
+}`,
+		wantCount: 1,
+		wantMsg:   wantDelegateMsg,
+		wantFunc:  "createStateClient",
+	},
+	{
+		name: "ignored-param TryCatchError closure clean",
+		src: `package testpkg
+import IOE "github.com/IBM/fp-go/v2/ioeither"
+type State struct{ Client string }
+func setClient(c string) func(State) State {
+	return func(s State) State { s.Client = c; return s }
+}
+func rawClient() (string, error) { return "ok", nil }
+func createStateClient(_ State) IOE.IOEither[error, string] {
+	return IOE.TryCatchError(func() (string, error) {
+		return rawClient()
+	})
+}
+func runPipe(st State) IOE.IOEither[error, State] {
+	return IOE.Bind(setClient, createStateClient)(IOE.Of[error](st))
+}`,
+	},
+	{
+		name: "single-use F.Pipe wrapper in IOE.Chain flagged",
+		src: `package testpkg
+import (
+	F "github.com/IBM/fp-go/v2/function"
+	IOE "github.com/IBM/fp-go/v2/ioeither"
+)
+type State struct{ Work int }
+func callPrimary(st State) IOE.IOEither[error, State] {
+	return IOE.Of[error](st)
+}
+func callFallback(st State) IOE.IOEither[error, State] {
+	return IOE.Of[error](st)
+}
+func fetchPrimaryOrFallback(st State) IOE.IOEither[error, State] {
+	return F.Pipe1(
+		callPrimary(st),
+		IOE.Alt(func() IOE.IOEither[error, State] {
+			return callFallback(st)
+		}),
+	)
+}
+func runPipe(st State) IOE.IOEither[error, State] {
+	return F.Pipe1(
+		IOE.Of[error](st),
+		IOE.Chain(fetchPrimaryOrFallback),
+	)
+}`,
+		wantCount: 1,
+		wantMsg:   wantDelegateMsg,
+		wantFunc:  "fetchPrimaryOrFallback",
+	},
+	{
+		name: "single-use F.Pipe wrapper in lens.Modify flagged",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+type Lens struct{}
+func (Lens) Modify(fn func(string) string) func(string) string {
+	return fn
+}
+var idLens Lens
+func trimA(s string) string { return s }
+func trimB(s string) string { return s }
+func normalizeID(id string) string {
+	return F.Pipe2(id, trimA, trimB)
+}
+func runPipe(id string) string {
+	return F.Pipe1(
+		id,
+		idLens.Modify(normalizeID),
+	)
+}`,
+		wantCount: 1,
+		wantMsg:   wantDelegateMsg,
+		wantFunc:  "normalizeID",
+	},
+	{
+		name: "reused F.Pipe helper across two call sites clean",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func trimA(s string) string { return s }
+func trimB(s string) string { return s }
+func normalizeID(id string) string {
+	return F.Pipe2(id, trimA, trimB)
+}
+func firstPipe(id string) string {
+	return F.Pipe1(id, normalizeID)
+}
+func secondPipe(id string) string {
+	return F.Pipe1(id, normalizeID)
+}`,
+	},
 }
 
 func TestTrivialDelegate_Table(t *testing.T) {
