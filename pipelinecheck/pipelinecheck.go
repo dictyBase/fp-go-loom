@@ -39,11 +39,14 @@
 //     twice. Converge both branches on one description value, then
 //     execute once.
 //  11. Trivial delegate (RequireTrivialDelegate, or Check/Require
-//     with Config.RequireTrivialDelegate): a function whose entire
-//     body is a single pass-through call on its own parameters
-//     (func f(x State) IOE.X { return g(x) }) referenced from an
-//     F.Pipe/F.Flow chain or an IOE.* combinator argument in the
-//     same package. Call g directly at the pipeline call site.
+//     with Config.RequireTrivialDelegate): a function referenced
+//     from an F.Pipe/F.Flow chain, an IOE.* combinator, or
+//     lens.Modify in the same package that (a) returns a single
+//     pass-through call on its own parameters, (b) takes only
+//     ignored parameters (`_ State`) and returns a single
+//     non-closure call, or (c) is an unexported single-use F.PipeN
+//     wrapper with no TryCatch* or MapLeft stage. Call the target
+//     or inline the steps at the pipeline call site.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
 // Config.IsEntrypoint, "run*" by default). Rules 3 through 11 apply to

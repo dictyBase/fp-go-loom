@@ -37,11 +37,13 @@ type delegateCandidate struct {
 	singleUse bool
 }
 
-// CheckTrivialDelegate scans cfg.Roots and flags functions whose
-// entire body is a single pass-through call on their own parameters
-// (`func f(x State) IOE.X { return g(x) }`) when those functions are
-// referenced from an F.Pipe/F.F.Flow chain or an IOE.* combinator
-// argument in the same package. Unreferenced wrappers are out of
+// CheckTrivialDelegate scans cfg.Roots and flags functions
+// referenced from an F.Pipe/F.Flow chain, an IOE.* combinator
+// argument, or lens.Modify in the same package when they (1) return
+// a single pass-through call on their own parameters, (2) take only
+// ignored parameters (`_ State`) and return a single non-closure
+// call, or (3) are unexported single-use F.PipeN wrappers with no
+// TryCatch* or MapLeft stage. Unreferenced wrappers are out of
 // scope; the unused linter owns dead code.
 // cfg.AllowTrivialDelegateDirective exempts a function (defaults to
 // DefaultAllowTrivialDelegateDirective).
