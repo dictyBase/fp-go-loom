@@ -22,6 +22,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
   - [Predicates](#predicates)
   - [Pipeline and style checks](#pipeline-and-style-checks)
     - [Terminal-effect rules](#terminal-effect-rules)
+    - [Trivial-delegate rule](#trivial-delegate-rule)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -58,7 +59,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -461,6 +462,35 @@ not arbitrary call chains — the analysis stays syntax-only.
 
 Opt out with `// fp-go:allow-duplicate-terminal <reason>` or
 `// fp-go:allow-recovery-after-terminal <reason>`.
+
+#### Trivial-delegate rule
+
+`RequireTrivialDelegate` (or `Config.RequireTrivialDelegate: true` in
+`Check`/`Require`) flags three kinds of ceremonial wrapper functions
+referenced from `F.Pipe*`, `F.Flow*`, `IOE.*`, or `lens.Modify` in the
+same package:
+
+1. **Single-statement pass-through calls** (`func f(x State) IOE.X { return g(x) }`)
+   whose arguments only forward the wrapper's own parameters — call `g`
+   directly at the pipeline call site.
+2. **Ignored-parameter pipeline adapters** (`func f(_ State) IOE.X { return g(...) }`)
+   that discard their state parameter and return a single non-closure
+   call — pass `F.Constant1[State](g(...))` at the pipeline call site.
+3. **Single-use `F.PipeN` wrappers** (`func f(s State) M { return F.PipeN(s, ...) }`)
+   referenced only once in a linear pipeline step (`F.Pipe*`, `F.Flow*`,
+   `IOE.Chain*`, `IOE.Map*`, or `lens.Modify`) with no `TryCatch*` or
+   `MapLeft` stage — inline the steps directly into the caller's `F.PipeN`.
+
+```go
+func TestTrivialDelegate(t *testing.T) {
+	pipelinecheck.RequireTrivialDelegate(t, pipelinecheck.Config{
+		Roots: []string{"."},
+	})
+}
+```
+
+Opt out only for a documented exception:
+`// fp-go:allow-trivial-delegate <reason>`.
 
 ## Pipelines
 
