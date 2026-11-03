@@ -23,6 +23,8 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
   - [Pipeline and style checks](#pipeline-and-style-checks)
     - [Terminal-effect rules](#terminal-effect-rules)
     - [Trivial-delegate rule](#trivial-delegate-rule)
+    - [Imperative loop and branch rules](#imperative-loop-and-branch-rules)
+    - [Direct-apply rule](#direct-apply-rule)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -59,7 +61,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -492,6 +494,66 @@ func TestTrivialDelegate(t *testing.T) {
 Opt out only for a documented exception:
 `// fp-go:allow-trivial-delegate <reason>`.
 
+#### Imperative loop and branch rules
+
+`RequireNoImperativeLoop` flags every `for` and `range` statement.
+`RequireNoImperativeBranch` flags every `if`, `switch`, and type
+`switch`. Both skip the callback of an fp-go `TryCatch*` call, because
+that callback is the imperative shell around a raw effect. The branch
+rule is stricter than the point-free branching rule: that rule flags
+only an `if` inside a pipeline callback, and this rule flags an `if`
+in any function.
+
+Replace a loop with `A.Map`, `A.Reduce`, `A.FilterMap`, or
+`A.Traverse*`. Replace a branch with `O.FromPredicate` + `O.Fold`,
+`P.Fold`, `E.FromPredicate`, or `matchopt`.
+
+```go
+func TestNoImperativeControlFlow(t *testing.T) {
+	cfg := pipelinecheck.Config{Roots: []string{"."}}
+	pipelinecheck.RequireNoImperativeLoop(t, cfg)
+	pipelinecheck.RequireNoImperativeBranch(t, cfg)
+}
+```
+
+Some APIs only offer a mutable call, for example
+`ast.Node.AppendChild`. Wrap that call in one named adapter and opt
+out with a reason. The directive applies to the whole function:
+
+```go
+// fp-go:allow-loop goldmark nodes are mutable; AppendChild is the only API
+func withChildren(parent ast.Node, kids []ast.Node) ast.Node {
+	for _, kid := range kids {
+		parent.AppendChild(parent, kid)
+	}
+	return parent
+}
+```
+
+Opt out with `// fp-go:allow-loop <reason>` or
+`// fp-go:allow-branch <reason>`.
+
+#### Direct-apply rule
+
+`RequireNoDirectApply` flags `comb(args)(value)` in a file that
+imports fp-go or fp-go-loom, for example `A.Map(f)(xs)`. That shape
+reads inside-out. Write `F.Pipe1(xs, A.Map(f))` so the data flows
+left to right.
+
+```go
+func TestNoDirectApply(t *testing.T) {
+	pipelinecheck.RequireNoDirectApply(
+		t, pipelinecheck.Config{Roots: []string{"."}},
+	)
+}
+```
+
+The rule does not flag an fp-go call that takes a plain call as an
+argument, such as `P.Or(hasCode(x))`. That shape is a valid partial
+application, and syntax alone cannot tell it from data nesting.
+
+Opt out with `// fp-go:allow-direct-apply <reason>`.
+
 ## Pipelines
 
 The fp-go-concepts examples chain multiple combinators with `F.Pipe` to
@@ -696,6 +758,8 @@ ClassifyPassword("Password123") // "strong"
     ├── pipelinecheck.go       # Check, Require, Config, Violation
     ├── bareif.go              # Point-free branching rule
     ├── trycatch.go            # NoIfErrInTryCatch rule
+    ├── controlflow.go         # Imperative loop + branch rules
+    ├── directapply.go         # Direct-apply rule
     ├── printf.go              # SafePrintf rule + const resolution
     ├── pipelinecheck_test.go  # handoff + applied-seed tests
     └── stylecheck_test.go     # trycatch + printf tests
