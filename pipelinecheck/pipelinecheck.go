@@ -1,5 +1,6 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Ten rules are available via dedicated entry points:
+// AST checks. Fourteen rules are available via dedicated entry
+// points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
 //     single-step F.Pipe1(seed, namedFn) that delegates the whole
@@ -47,9 +48,20 @@
 //     non-closure call, or (c) is an unexported single-use F.PipeN
 //     wrapper with no TryCatch* or MapLeft stage. Call the target
 //     or inline the steps at the pipeline call site.
+//  12. Imperative loop (CheckNoImperativeLoop): a for or range
+//     statement outside an fp-go TryCatch* callback. Use A.Map,
+//     A.Reduce, A.FilterMap, or A.Traverse*.
+//  13. Imperative branch (CheckNoImperativeBranch): an if, switch,
+//     or type switch outside an fp-go TryCatch* callback. Use
+//     O.FromPredicate + O.Fold, P.Fold, E.FromPredicate, or
+//     matchopt. Stricter than rule 6, which flags only an if inside
+//     a pipeline callback.
+//  14. Direct apply (CheckNoDirectApply): in a file that imports
+//     fp-go, a comb(args)(value) call such as A.Map(f)(xs). Use
+//     F.Pipe1(xs, A.Map(f)) so data flows left to right.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 11 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 14 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
 // anywhere. Rules 9 and 10 are additionally inert until
 // Config.TerminalFunctions names the project's terminal effects. Rule
@@ -69,6 +81,9 @@
 //	// fp-go:allow-duplicate-terminal <reason>
 //	// fp-go:allow-recovery-after-terminal <reason>
 //	// fp-go:allow-trivial-delegate <reason>
+//	// fp-go:allow-loop <reason>
+//	// fp-go:allow-branch <reason>
+//	// fp-go:allow-direct-apply <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -297,6 +312,21 @@ type Config struct {
 	// trivial-delegate rule. Defaults to
 	// DefaultAllowTrivialDelegateDirective when empty.
 	AllowTrivialDelegateDirective string
+
+	// AllowLoopDirective exempts a function from the
+	// imperative-loop rule (used by CheckNoImperativeLoop).
+	// Defaults to DefaultAllowLoopDirective when empty.
+	AllowLoopDirective string
+
+	// AllowBranchDirective exempts a function from the
+	// imperative-branch rule (used by CheckNoImperativeBranch).
+	// Defaults to DefaultAllowBranchDirective when empty.
+	AllowBranchDirective string
+
+	// AllowDirectApplyDirective exempts a function from the
+	// direct-apply rule (used by CheckNoDirectApply). Defaults to
+	// DefaultAllowDirectApplyDirective when empty.
+	AllowDirectApplyDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -748,6 +778,12 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowRecoveryAfterTerminalDirective)
 	applyDefault(&cfg.AllowTrivialDelegateDirective,
 		DefaultAllowTrivialDelegateDirective)
+	applyDefault(&cfg.AllowLoopDirective,
+		DefaultAllowLoopDirective)
+	applyDefault(&cfg.AllowBranchDirective,
+		DefaultAllowBranchDirective)
+	applyDefault(&cfg.AllowDirectApplyDirective,
+		DefaultAllowDirectApplyDirective)
 	return cfg
 }
 
