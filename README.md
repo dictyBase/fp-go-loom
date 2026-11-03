@@ -60,7 +60,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/bytes` | `HasPositiveLen`, `IsNonEmpty` |
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
-| `strutils` | `JoinStrings` |
+| `strutils` | `JoinStrings`, `Space`, `Comma`, `Semicolon`, `Colon`, `Label`, `MiddleDot`, `EmDash`, `Newline`, `JoinSpace`, `JoinComma`, `JoinSemicolon`, `JoinMiddleDot`, `JoinLines`, `CollapseWhitespace`, `Wrap`, `Parens`, `Brackets`, `Quote`, `Period`, `MapNonEmpty`, `ConcatFields` |
 | `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective` |
 
 > **Note:** package names may differ from the import path's last segment
@@ -101,6 +101,74 @@ import "github.com/dictyBase/fp-go-loom/strutils"
 
 strutils.JoinStrings("a", "b", "c") // "abc"
 strutils.JoinStrings()             // ""
+```
+
+#### Separator monoids
+
+Each separator is a `M.Monoid[string]` built on
+`S.IntersperseMonoid`. An empty operand drops out together with its
+separator, so an optional part needs no branch. `Empty()` is `""`,
+and the monoid laws hold, so you can regroup joins freely.
+
+| Monoid | Separator | Fold over a slice |
+| :--- | :--- | :--- |
+| `Space` | `" "` | `JoinSpace` |
+| `Comma` | `", "` | `JoinComma` |
+| `Semicolon` | `"; "` | `JoinSemicolon` |
+| `Colon` | `":"` | — |
+| `Label` | `": "` | — |
+| `MiddleDot` | `" · "` | `JoinMiddleDot` |
+| `EmDash` | `" — "` | — |
+| `Newline` | `"\n"` | `JoinLines` |
+
+```go
+strutils.Comma.Concat("a", "b")              // "a, b"
+strutils.Comma.Concat("a", "")               // "a"
+strutils.JoinComma([]string{"a", "", "b"})   // "a, b"
+strutils.Label.Concat("Species", "discoideum") // "Species: discoideum"
+```
+
+Fold any slice with another monoid through `M.ConcatAll(m)`, or map
+and fold in one step with `F.Pipe1(f, A.FoldMap(m))`:
+
+```go
+names := F.Pipe1(lastName, A.FoldMap[Author](strutils.Comma))
+names(authors) // "Smith, Jones"
+```
+
+#### Text helpers
+
+```go
+strutils.CollapseWhitespace("  a \t b\n c ") // "a b c"
+strutils.Parens("2006")                     // "(2006)"
+strutils.Brackets("x")                      // "[x]"
+strutils.Quote("x")                         // `"x"`
+strutils.Period("Smith")                    // "Smith."
+strutils.Wrap("<", ">")("x")                // "<x>"
+```
+
+`MapNonEmpty(f)` applies `f` to a non-empty string and returns `""`
+for an empty one. With a separator monoid, it renders an optional
+part:
+
+```go
+doiLink := strutils.MapNonEmpty(toDOILink)
+strutils.MiddleDot.Concat(pubmed, doiLink(""))    // pubmed
+strutils.MiddleDot.Concat(pubmed, doiLink("10.1")) // pubmed + " · " + link
+```
+
+#### Join struct fields
+
+`ConcatFields[A](m)` lifts `m` to functions with `M.FunctionMonoid`
+and folds a list of field projections into one renderer. An empty
+field drops out with its separator:
+
+```go
+name := strutils.ConcatFields[Author](strutils.Space)(
+	[]func(Author) string{lastName, initials},
+)
+name(Author{Last: "Smith", Initials: "A"}) // "Smith A"
+name(Author{Last: "Jones"})                // "Jones"
 ```
 
 ### Either & error handling
@@ -753,6 +821,8 @@ ClassifyPassword("Password123") // "strong"
 │       └── strings_test.go
 ├── strutils/
 │   ├── strutils.go            # JoinStrings
+│   ├── monoid.go              # separator monoids, Wrap, MapNonEmpty, ConcatFields
+│   ├── monoid_test.go
 │   └── strutils_test.go
 └── pipelinecheck/
     ├── pipelinecheck.go       # Check, Require, Config, Violation
