@@ -26,6 +26,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
     - [Imperative loop and branch rules](#imperative-loop-and-branch-rules)
     - [Direct-apply rule](#direct-apply-rule)
     - [Populated-struct rule](#populated-struct-rule)
+    - [Local-pipe-closure rule](#local-pipe-closure-rule)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -62,7 +63,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings`, `Space`, `Comma`, `Semicolon`, `Colon`, `Label`, `MiddleDot`, `EmDash`, `Newline`, `JoinSpace`, `JoinComma`, `JoinSemicolon`, `JoinMiddleDot`, `JoinLines`, `CollapseWhitespace`, `Wrap`, `Parens`, `Brackets`, `Quote`, `Period`, `MapNonEmpty`, `ConcatFields` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowPopulatedStructDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `CheckNoLocalPipeClosure`, `RequireNoLocalPipeClosure`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowPopulatedStructDirective`, `DefaultAllowLocalPipeClosureDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -652,6 +653,34 @@ func TestNoPopulatedStruct(t *testing.T) {
 ```
 
 Opt out with `// fp-go:allow-struct-literal <reason>`.
+
+#### Local-pipe-closure rule
+
+`RequireNoLocalPipeClosure` flags four local assignment shapes inside
+functions in files that import fp-go or fp-go-loom (outside `TryCatch*`
+raw-effect callbacks):
+
+1. **Local closure variables** (`toInput := func(x X) Y { ... }`) —
+   extract a standalone package-level function and bind state with
+   `F.Bind1st` / `F.Bind2nd`.
+2. **Local `F.Flow*` pipelines** (`extractRoot := F.Flow3(...)`) — move
+   reusable pipelines to the package-level `var` block or inline their
+   steps into one flat `F.PipeN`.
+3. **Split `F.Pipe*` seeds** (`inputs := F.Pipe1(...); return F.Pipe2(inputs, ...)`)
+   — combine both into one flat `F.PipeN`.
+4. **Local fp-go combinator assignments** (`traverse := IOE.TraverseArray(exec)`)
+   referenced as pipeline or combinator steps — move them to the
+   package-level `var` block or inline them at the step.
+
+```go
+func TestNoLocalPipeClosure(t *testing.T) {
+	pipelinecheck.RequireNoLocalPipeClosure(
+		t, pipelinecheck.Config{Roots: []string{"."}},
+	)
+}
+```
+
+Opt out with `// fp-go:allow-local-pipe-closure <reason>`.
 
 ## Pipelines
 

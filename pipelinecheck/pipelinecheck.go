@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Fifteen rules are available via dedicated entry
+// AST checks. Sixteen rules are available via dedicated entry
 // points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
@@ -63,9 +63,15 @@
 //     file that imports fp-go, a struct composite literal with
 //     field values such as T{Field: val}. Start from T{} and
 //     populate fields with lens.Set in F.PipeN.
+//  16. Local pipe closure (CheckNoLocalPipeClosure): in a file
+//     that imports fp-go, a local func literal, local F.Flow*
+//     pipeline, split F.Pipe* seed, or local fp-go combinator
+//     assigned inside a function. Use a standalone function
+//     (with F.Bind1st/F.Bind2nd), a package-level var, or one
+//     flat F.PipeN.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 15 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 16 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
 // anywhere. Rules 9 and 10 are additionally inert until
 // Config.TerminalFunctions names the project's terminal effects. Rule
@@ -89,6 +95,7 @@
 //	// fp-go:allow-branch <reason>
 //	// fp-go:allow-direct-apply <reason>
 //	// fp-go:allow-struct-literal <reason>
+//	// fp-go:allow-local-pipe-closure <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -338,6 +345,12 @@ type Config struct {
 	// CheckNoPopulatedStruct). Defaults to
 	// DefaultAllowPopulatedStructDirective when empty.
 	AllowPopulatedStructDirective string
+
+	// AllowLocalPipeClosureDirective exempts a function from the
+	// local-pipe-closure rule (used by
+	// CheckNoLocalPipeClosure). Defaults to
+	// DefaultAllowLocalPipeClosureDirective when empty.
+	AllowLocalPipeClosureDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -797,6 +810,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowDirectApplyDirective)
 	applyDefault(&cfg.AllowPopulatedStructDirective,
 		DefaultAllowPopulatedStructDirective)
+	applyDefault(&cfg.AllowLocalPipeClosureDirective,
+		DefaultAllowLocalPipeClosureDirective)
 	return cfg
 }
 
