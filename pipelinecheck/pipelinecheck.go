@@ -1,5 +1,5 @@
 // Package pipelinecheck enforces fp-go style rules via syntax-only
-// AST checks. Fourteen rules are available via dedicated entry
+// AST checks. Fifteen rules are available via dedicated entry
 // points:
 //
 //  1. Handoff wrapper (Check/Require, default on for entrypoints): a
@@ -59,9 +59,13 @@
 //  14. Direct apply (CheckNoDirectApply): in a file that imports
 //     fp-go, a comb(args)(value) call such as A.Map(f)(xs). Use
 //     F.Pipe1(xs, A.Map(f)) so data flows left to right.
+//  15. Populated struct literal (CheckNoPopulatedStruct): in a
+//     file that imports fp-go, a struct composite literal with
+//     field values such as T{Field: val}. Start from T{} and
+//     populate fields with lens.Set in F.PipeN.
 //
 // Rules 1 and 2 are entrypoint-scoped (a function matching
-// Config.IsEntrypoint, "run*" by default). Rules 3 through 14 apply to
+// Config.IsEntrypoint, "run*" by default). Rules 3 through 15 apply to
 // all functions, since TryCatch, Printf, Fold, and callbacks appear
 // anywhere. Rules 9 and 10 are additionally inert until
 // Config.TerminalFunctions names the project's terminal effects. Rule
@@ -84,6 +88,7 @@
 //	// fp-go:allow-loop <reason>
 //	// fp-go:allow-branch <reason>
 //	// fp-go:allow-direct-apply <reason>
+//	// fp-go:allow-struct-literal <reason>
 //
 // Limitations: analysis is syntax-only (no go/types), so a shadowed
 // alias of a target package may false-positive and a dot import (import
@@ -327,6 +332,12 @@ type Config struct {
 	// direct-apply rule (used by CheckNoDirectApply). Defaults to
 	// DefaultAllowDirectApplyDirective when empty.
 	AllowDirectApplyDirective string
+
+	// AllowPopulatedStructDirective exempts a function from the
+	// populated-struct-literal rule (used by
+	// CheckNoPopulatedStruct). Defaults to
+	// DefaultAllowPopulatedStructDirective when empty.
+	AllowPopulatedStructDirective string
 }
 
 // Violation is a single style-rule failure.
@@ -784,6 +795,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowBranchDirective)
 	applyDefault(&cfg.AllowDirectApplyDirective,
 		DefaultAllowDirectApplyDirective)
+	applyDefault(&cfg.AllowPopulatedStructDirective,
+		DefaultAllowPopulatedStructDirective)
 	return cfg
 }
 
