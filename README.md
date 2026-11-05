@@ -25,6 +25,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
     - [Trivial-delegate rule](#trivial-delegate-rule)
     - [Imperative loop and branch rules](#imperative-loop-and-branch-rules)
     - [Direct-apply rule](#direct-apply-rule)
+    - [Populated-struct rule](#populated-struct-rule)
 - [Pipelines](#pipelines)
   - [Either validation chain](#either-validation-chain)
   - [Parse and range-validate](#parse-and-range-validate)
@@ -61,7 +62,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings`, `Space`, `Comma`, `Semicolon`, `Colon`, `Label`, `MiddleDot`, `EmDash`, `Newline`, `JoinSpace`, `JoinComma`, `JoinSemicolon`, `JoinMiddleDot`, `JoinLines`, `CollapseWhitespace`, `Wrap`, `Parens`, `Brackets`, `Quote`, `Period`, `MapNonEmpty`, `ConcatFields` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective` |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowPopulatedStructDirective` |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -621,6 +622,36 @@ argument, such as `P.Or(hasCode(x))`. That shape is a valid partial
 application, and syntax alone cannot tell it from data nesting.
 
 Opt out with `// fp-go:allow-direct-apply <reason>`.
+
+#### Populated-struct rule
+
+`RequireNoPopulatedStruct` flags populated struct composite literals
+(`T{Field: value}`, `&T{Field: value}`, `[]T{{Field: value}}`) in files
+that import fp-go or fp-go-loom. Start from the empty zero struct `T{}`
+and populate fields with `lens.Set` in `F.PipeN` instead:
+
+```go
+func buildPerson() Person {
+	return F.Pipe2(
+		Person{},
+		nameLens.Set("Alice"),
+		ageLens.Set(30),
+	)
+}
+```
+
+Empty zero literals (`T{}`), slice literals, and map literals remain
+clean.
+
+```go
+func TestNoPopulatedStruct(t *testing.T) {
+	pipelinecheck.RequireNoPopulatedStruct(
+		t, pipelinecheck.Config{Roots: []string{"."}},
+	)
+}
+```
+
+Opt out with `// fp-go:allow-struct-literal <reason>`.
 
 ## Pipelines
 
