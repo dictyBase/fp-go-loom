@@ -28,6 +28,7 @@ func TestPipelineContinuity(t *testing.T) {
 	pipelinecheck.RequireNoNonRawTryCatchCallback(t, rawCfg)
 	pipelinecheck.RequireNoIfErrInTryCatch(t, rawCfg)
 	pipelinecheck.RequireBareIf(t, rawCfg)
+	pipelinecheck.RequireNoPopulatedStruct(t, rawCfg)
 }
 
 // TestGateCatchesViolation pins the violation fixture in
