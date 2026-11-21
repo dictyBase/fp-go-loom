@@ -105,6 +105,9 @@ func packageDelegateViolations(
 	candidates := make(map[string]delegateCandidate)
 	var violations []Violation
 	for _, p := range files {
+		if p.generated {
+			continue
+		}
 		collectDelegateCandidates(
 			p.fset,
 			p.f,
@@ -120,6 +123,9 @@ func packageDelegateViolations(
 	counts := packageIdentCounts(files)
 	reported := make(map[string]bool)
 	for _, p := range files {
+		if p.generated {
+			continue
+		}
 		reportPackageViolations(
 			p.fset,
 			p.f,

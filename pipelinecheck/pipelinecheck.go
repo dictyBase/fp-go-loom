@@ -144,6 +144,13 @@
 // inspected. Its public entry points are CheckTerminalEffect and
 // RequireTerminalEffect.
 //
+// All rules ignore files with a full line comment of the form
+// "// Code generated ... DO NOT EDIT." before or after the package
+// clause. This includes fp-go lens output. Generated declarations
+// supply package context for checks of handwritten source.
+// Marker fragments, block comments, and string literals do not stop
+// checks. Syntax errors cause scan errors.
+//
 // This package walks Go ASTs imperatively. ast.Inspect's callback model
 // does not fit fp-go pipe composition, so the walk layers are imperative
 // by design; the public API remains in the house style.
@@ -384,6 +391,9 @@ func Check(cfg Config) ([]Violation, error) {
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		violations = append(violations,
 			checkFile(p.fset, p.f, cfg)...)
 	}
@@ -406,6 +416,9 @@ func CheckBareIf(cfg Config) ([]Violation, error) {
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		violations = append(violations, checkBareIf(
 			p.fset,
 			p.f,
@@ -444,6 +457,9 @@ func CheckNoHandRolledFileJoinInArrayMap(
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		violations = append(
 			violations,
 			checkNoHandRolledFileJoin(
@@ -484,6 +500,9 @@ func CheckNoIfErrInTryCatch(
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		aliases := ioeitherAliases(p.f)
 		if len(aliases) == 0 {
 			continue
@@ -509,6 +528,9 @@ func CheckNoNonRawTryCatchCallback(
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		aliases := ioeitherAliases(p.f)
 		if len(aliases) == 0 {
 			continue
@@ -562,6 +584,9 @@ func CheckSafePrintf(cfg Config) ([]Violation, error) {
 	pkgConst := buildPkgConsts(parsed)
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		aliases := ioAliases(p.f)
 		if len(aliases) == 0 {
 			continue
@@ -603,6 +628,9 @@ func CheckRedundantFold(cfg Config) ([]Violation, error) {
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		aliases := eitherAliases(p.f)
 		if len(aliases) == 0 {
 			continue
@@ -637,6 +665,9 @@ func CheckTerminalEffect(cfg Config) ([]Violation, error) {
 	funcs := buildPkgFuncs(parsed)
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		violations = append(violations, terminalFileViolations(
 			p, funcs[pkgKey(p.fset, p.f)], terms, cfg,
 		)...)
@@ -877,12 +908,14 @@ func isSkippedDir(name string) bool {
 
 // parsedFile is a parsed non-test .go file with its token.FileSet.
 type parsedFile struct {
-	fset *token.FileSet
-	f    *ast.File
+	fset      *token.FileSet
+	f         *ast.File
+	generated bool
 }
 
 // parseAll parses every non-test .go file under cfg.Roots once and
 // returns them in scan order. It deduplicates paths across roots.
+// Generated ASTs supply package context but produce no diagnostics.
 func parseAll(cfg Config) ([]parsedFile, error) {
 	seen := make(map[string]bool)
 	var out []parsedFile
@@ -908,10 +941,31 @@ func parseAll(cfg Config) ([]parsedFile, error) {
 					"parse %s: %w", file, err,
 				)
 			}
-			out = append(out, parsedFile{fset, f})
+			out = append(out, parsedFile{
+				fset:      fset,
+				f:         f,
+				generated: isGenerated(f),
+			})
 		}
 	}
 	return out, nil
+}
+
+// isGenerated finds full Go generated-code marker lines.
+// Unlike ast.IsGenerated, it also accepts the post-package marker
+// that the fp-go lens generator emits. Only line comments qualify.
+func isGenerated(f *ast.File) bool {
+	for _, group := range f.Comments {
+		for _, comment := range group.List {
+			text, ok := strings.CutPrefix(
+				comment.Text, "// Code generated ",
+			)
+			if ok && strings.HasSuffix(text, " DO NOT EDIT.") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildPkgConsts groups parsed files by package identity and
