@@ -141,7 +141,7 @@ func checkControlFlow(
 	return violations
 }
 
-// scanFiles runs check over every non-test file under cfg.Roots.
+// scanFiles runs check over each handwritten non-test Go file.
 func scanFiles(
 	cfg Config,
 	check func(*token.FileSet, *ast.File) []Violation,
@@ -152,6 +152,9 @@ func scanFiles(
 	}
 	var violations []Violation
 	for _, p := range parsed {
+		if p.generated {
+			continue
+		}
 		violations = append(violations, check(p.fset, p.f)...)
 	}
 	return violations, nil
