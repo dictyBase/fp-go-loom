@@ -26,6 +26,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
     - [Trivial-delegate rule](#trivial-delegate-rule)
     - [Imperative loop and branch rules](#imperative-loop-and-branch-rules)
     - [Direct-apply rule](#direct-apply-rule)
+    - [New-pipe rule](#new-pipe-rule)
     - [Populated-struct rule](#populated-struct-rule)
     - [Local-pipe-closure rule](#local-pipe-closure-rule)
 - [Pipelines](#pipelines)
@@ -65,7 +66,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings`, `Space`, `Comma`, `Semicolon`, `Colon`, `Label`, `MiddleDot`, `EmDash`, `Newline`, `JoinSpace`, `JoinComma`, `JoinSemicolon`, `JoinMiddleDot`, `JoinLines`, `CollapseWhitespace`, `Wrap`, `Parens`, `Brackets`, `Quote`, `Period`, `MapNonEmpty`, `ConcatFields` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `CheckNoLocalPipeClosure`, `RequireNoLocalPipeClosure`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowPopulatedStructDirective`, `DefaultAllowLocalPipeClosureDirective`. All rules ignore generated source. |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoNewPipe`, `RequireNoNewPipe`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `CheckNoLocalPipeClosure`, `RequireNoLocalPipeClosure`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowNewPipeDirective`, `DefaultAllowPopulatedStructDirective`, `DefaultAllowLocalPipeClosureDirective`. All rules ignore generated source. |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -663,6 +664,13 @@ argument, such as `P.Or(hasCode(x))`. That shape is a valid partial
 application, and syntax alone cannot tell it from data nesting.
 
 Opt out with `// fp-go:allow-direct-apply <reason>`.
+
+#### New-pipe rule
+
+`RequireNoNewPipe` flags `new(F.PipeN(...))` and `new(F.FlowN(...))`.
+Return the value from the pipeline. Take its address with `&v` only at
+the API call that needs a pointer. Opt out with
+`// fp-go:allow-new-pipe <reason>`.
 
 #### Populated-struct rule
 

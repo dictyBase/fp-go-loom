@@ -346,6 +346,9 @@ type Config struct {
 	// direct-apply rule (used by CheckNoDirectApply). Defaults to
 	// DefaultAllowDirectApplyDirective when empty.
 	AllowDirectApplyDirective string
+	// AllowNewPipeDirective exempts a function from the new-pipe
+	// rule. Defaults to DefaultAllowNewPipeDirective when empty.
+	AllowNewPipeDirective string
 
 	// AllowPopulatedStructDirective exempts a function from the
 	// populated-struct-literal rule (used by
@@ -839,6 +842,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowBranchDirective)
 	applyDefault(&cfg.AllowDirectApplyDirective,
 		DefaultAllowDirectApplyDirective)
+	applyDefault(&cfg.AllowNewPipeDirective,
+		DefaultAllowNewPipeDirective)
 	applyDefault(&cfg.AllowPopulatedStructDirective,
 		DefaultAllowPopulatedStructDirective)
 	applyDefault(&cfg.AllowLocalPipeClosureDirective,
