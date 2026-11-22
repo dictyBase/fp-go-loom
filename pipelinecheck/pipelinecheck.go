@@ -350,6 +350,10 @@ type Config struct {
 	// AllowNewPipeDirective exempts a function from the new-pipe
 	// rule. Defaults to DefaultAllowNewPipeDirective when empty.
 	AllowNewPipeDirective string
+	// AllowBoolExprDirective exempts a function from the
+	// bool-expression rule. Defaults to
+	// DefaultAllowBoolExprDirective when empty.
+	AllowBoolExprDirective string
 
 	// AllowPopulatedStructDirective exempts a function from the
 	// populated-struct-literal rule (used by
@@ -845,6 +849,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowDirectApplyDirective)
 	applyDefault(&cfg.AllowNewPipeDirective,
 		DefaultAllowNewPipeDirective)
+	applyDefault(&cfg.AllowBoolExprDirective,
+		DefaultAllowBoolExprDirective)
 	applyDefault(&cfg.AllowPopulatedStructDirective,
 		DefaultAllowPopulatedStructDirective)
 	applyDefault(&cfg.AllowLocalPipeClosureDirective,
