@@ -593,6 +593,9 @@ same package:
    referenced only once in a linear pipeline step (`F.Pipe*`, `F.Flow*`,
    `IOE.Chain*`, `IOE.Map*`, or `lens.Modify`) with no `TryCatch*` or
    `MapLeft` stage — inline the steps directly into the caller's `F.PipeN`.
+   The rule flags only a wrapper of one step after the seed
+   (`F.Pipe1(x, f)`). A wrapper of two or more steps is a named
+   operation, and the rule does not flag it.
 
 ```go
 func TestTrivialDelegate(t *testing.T) {

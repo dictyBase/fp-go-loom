@@ -13,6 +13,11 @@ import (
 // non-empty reason.
 const DefaultAllowTrivialDelegateDirective = "fp-go:allow-trivial-delegate"
 
+// maxDelegatePipeSteps is the largest step count, seed excluded,
+// of a single-use F.PipeN wrapper that the rule still flags. A
+// longer pipe is a named domain operation, not ceremony.
+const maxDelegatePipeSteps = 1
+
 // trivialDelegateMessage formats the failure message for a wrapper
 // that only delegates to target.
 func trivialDelegateMessage(
@@ -42,8 +47,9 @@ type delegateCandidate struct {
 // argument, or lens.Modify in the same package when they (1) return
 // a single pass-through call on their own parameters, (2) take only
 // ignored parameters (`_ State`) and return a single non-closure
-// call, or (3) are unexported single-use F.PipeN wrappers with no
-// TryCatch* or MapLeft stage. Unreferenced wrappers are out of
+// call, or (3) are unexported single-use F.PipeN wrappers of at
+// most maxDelegatePipeSteps steps with no TryCatch* or MapLeft
+// stage. Unreferenced wrappers are out of
 // scope; the unused linter owns dead code.
 // cfg.AllowTrivialDelegateDirective exempts a function (defaults to
 // DefaultAllowTrivialDelegateDirective).
@@ -263,8 +269,9 @@ func ignoredParamTarget(fn *ast.FuncDecl) (string, bool) {
 
 // singleUsePipeTarget flags an unexported package-level function
 // whose entire body is `return F.PipeN(seed, ...)` where seed
-// forwards the function's parameter and no step is a TryCatch* or
-// MapLeft effect/error-wrapping stage.
+// forwards the function's parameter, the pipe has at most
+// maxDelegatePipeSteps steps, and no step is a TryCatch* or MapLeft
+// effect/error-wrapping stage.
 func singleUsePipeTarget(
 	fn *ast.FuncDecl,
 	fnAliases map[string]bool,
@@ -277,7 +284,8 @@ func singleUsePipeTarget(
 	if !ok || !isPipeOrFlowCall(call, fnAliases) {
 		return "", false
 	}
-	if len(call.Args) < 2 {
+	steps := len(call.Args) - 1
+	if steps < 1 || steps > maxDelegatePipeSteps {
 		return "", false
 	}
 	params := paramNames(fn)
