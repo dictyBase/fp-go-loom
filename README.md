@@ -15,6 +15,7 @@ bridges. Woven on top of fp-go v2; importable by any Go project.
 - [Packages](#packages)
 - [Usage](#usage)
   - [Arrays](#arrays)
+  - [Endomorphism builders](#endomorphism-builders)
   - [Strings](#strings)
   - [Either & error handling](#either--error-handling)
   - [IOEither bridge](#ioeither-bridge)
@@ -55,6 +56,7 @@ go get github.com/dictyBase/fp-go-loom
 | `array` | `Compact`, `ParseWith` |
 | `either/parse` | `ParseInt` |
 | `eithererr` | `ConstErr` |
+| `endomorphism` | `BuildFrom` |
 | `ioeitherutils` | `ToEither` |
 | `matchopt` | `Case`, `Const`, `Default`, `Alt`, `First`, `Match` |
 | `predicate/ord` | `IntOrd`, `Float64Ord`, `IntEq`, `Float64Eq`, `StringEq`, `IntBetween`, `IntBetweenInclusive`, `MinStrLen`, `MaxStrLen`, `StrLenEq`, `NotEqualF64`, `NotEqualInt`, `NotEqualStr`, `StrEq` |
@@ -95,6 +97,36 @@ arrutils.Compact[string](opts) // []string{"a", "b"}
 parseInts := arrutils.ParseWith(strconv.Atoi)
 parseInts([]string{"1", "bad", "42", "x", "7"}) // []int{1, 42, 7}
 ```
+
+### Endomorphism builders
+
+`BuildFrom` makes a struct from one input, for example a CLI context.
+Each recipe reads one value from the input and returns a lens setter.
+The builder applies the setters in list order to the zero struct.
+
+```go
+import (
+    En "github.com/IBM/fp-go/v2/endomorphism"
+    F "github.com/IBM/fp-go/v2/function"
+    endoutils "github.com/dictyBase/fp-go-loom/endomorphism"
+    "github.com/urfave/cli/v2"
+)
+
+// Params, inputL, outputL, flagString, and c come from the
+// consumer code. flagString is (*cli.Context).String.
+
+paramsOf := endoutils.BuildFrom(
+    []func(*cli.Context) En.Endomorphism[Params]{
+        F.Flow2(F.Bind2nd(flagString, "input"), inputL.Set),
+        F.Flow2(F.Bind2nd(flagString, "output"), outputL.Set),
+    },
+)
+paramsOf(c) // Params{Input: ..., Output: ...}
+```
+
+Use `BuildFrom` only for pure recipes that cannot fail.
+Use `E.Bind` or `IOE.Bind` for a fallible field or a dependent field.
+When two recipes set the same field, the last recipe wins.
 
 ### Strings
 
@@ -863,6 +895,9 @@ ClassifyPassword("Password123") // "strong"
 ├── array/
 │   ├── array.go               # Compact, ParseWith
 │   └── array_test.go
+├── endomorphism/
+│   ├── endomorphism.go        # BuildFrom
+│   └── endomorphism_test.go
 ├── either/
 │   └── parse/
 │       ├── parse.go           # ParseInt

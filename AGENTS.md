@@ -22,7 +22,7 @@ golangci-lint fmt
 ## Repo structure
 
 - Single-module library: root `go.mod` only.
-- Sub-packages under the module root: `array`, `either/parse`, `eithererr`,
+- Sub-packages under the module root: `array`, `either/parse`, `eithererr`, `endomorphism`,
   `ioeitherutils`, `matchopt`, `predicate/{ord,array,bytes,strings}`, `strutils`.
 - All packages are importable libraries (no `main.go`).
 
