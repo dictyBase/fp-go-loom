@@ -283,17 +283,31 @@ var idLens Lens
 func trimA(s string) string { return s }
 func trimB(s string) string { return s }
 func normalizeID(id string) string {
-	return F.Pipe2(id, trimA, trimB)
+	return F.Pipe1(id, trimA)
 }
 func runPipe(id string) string {
-	return F.Pipe1(
+	return F.Pipe2(
 		id,
+		trimB,
 		idLens.Modify(normalizeID),
 	)
 }`,
 		wantCount: 1,
 		wantMsg:   wantDelegateMsg,
 		wantFunc:  "normalizeID",
+	},
+	{
+		name: "single-use F.Pipe2 wrapper above step limit clean",
+		src: `package testpkg
+import F "github.com/IBM/fp-go/v2/function"
+func trimA(s string) string { return s }
+func trimB(s string) string { return s }
+func normalizeID(id string) string {
+	return F.Pipe2(id, trimA, trimB)
+}
+func runPipe(id string) string {
+	return F.Pipe1(id, normalizeID)
+}`,
 	},
 	{
 		name: "reused F.Pipe helper across two call sites clean",

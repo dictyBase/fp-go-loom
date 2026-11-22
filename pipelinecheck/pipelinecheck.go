@@ -46,7 +46,8 @@
 //     pass-through call on its own parameters, (b) takes only
 //     ignored parameters (`_ State`) and returns a single
 //     non-closure call, or (c) is an unexported single-use F.PipeN
-//     wrapper with no TryCatch* or MapLeft stage. Call the target
+//     wrapper of one step with no TryCatch* or MapLeft
+//     stage. Call the target
 //     or inline the steps at the pipeline call site.
 //  12. Imperative loop (CheckNoImperativeLoop): a for or range
 //     statement outside an fp-go TryCatch* callback. Use A.Map,
