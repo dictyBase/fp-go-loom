@@ -30,6 +30,7 @@ func TestPipelineContinuity(t *testing.T) {
 	pipelinecheck.RequireBareIf(t, rawCfg)
 	pipelinecheck.RequireNoPopulatedStruct(t, rawCfg)
 	pipelinecheck.RequireNoLocalPipeClosure(t, rawCfg)
+	pipelinecheck.RequireNoFlap(t, rawCfg)
 }
 
 // TestGateCatchesViolation pins the violation fixture in
