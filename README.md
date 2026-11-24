@@ -67,7 +67,7 @@ go get github.com/dictyBase/fp-go-loom
 | `predicate/strings` | `LastIndexOf`, `HasSuffix`, `ContainsRuneClass`, `HasAtSign`, `StrLenBetween` |
 | `predicate/fs` | `IsDir`, `IsRegular`, `IsDirInfo`, `IsRegularInfo` |
 | `strutils` | `JoinStrings`, `Space`, `Comma`, `Semicolon`, `Colon`, `Label`, `MiddleDot`, `EmDash`, `Newline`, `JoinSpace`, `JoinComma`, `JoinSemicolon`, `JoinMiddleDot`, `JoinLines`, `CollapseWhitespace`, `Wrap`, `Parens`, `Brackets`, `Quote`, `Period`, `MapNonEmpty`, `ConcatFields` |
-| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoNewPipe`, `RequireNoNewPipe`, `CheckNoBoolExpr`, `RequireNoBoolExpr`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `CheckNoLocalPipeClosure`, `RequireNoLocalPipeClosure`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowNewPipeDirective`, `DefaultAllowBoolExprDirective`, `DefaultAllowPopulatedStructDirective`, `DefaultAllowLocalPipeClosureDirective`. All rules ignore generated source. |
+| `pipelinecheck` | `Check`, `Require`, `Config`, `Violation`, `Reporter`, `ModuleRoot`, `CheckBareIf`, `RequireBareIf`, `CheckNoIfErrInTryCatch`, `RequireNoIfErrInTryCatch`, `CheckNoHandRolledFileJoinInArrayMap`, `RequireNoHandRolledFileJoinInArrayMap`, `CheckNoNonRawTryCatchCallback`, `RequireNoNonRawTryCatchCallback`, `CheckSafePrintf`, `RequireSafePrintf`, `CheckRedundantFold`, `RequireNoRedundantFold`, `CheckTerminalEffect`, `RequireTerminalEffect`, `CheckTrivialDelegate`, `RequireTrivialDelegate`, `CheckNoImperativeLoop`, `RequireNoImperativeLoop`, `CheckNoImperativeBranch`, `RequireNoImperativeBranch`, `CheckNoDirectApply`, `RequireNoDirectApply`, `CheckNoNewPipe`, `RequireNoNewPipe`, `CheckNoBoolExpr`, `RequireNoBoolExpr`, `CheckNoFlap`, `RequireNoFlap`, `CheckNoPopulatedStruct`, `RequireNoPopulatedStruct`, `CheckNoLocalPipeClosure`, `RequireNoLocalPipeClosure`, `FunctionPkgPath`, `ArrayPkgPath`, `FilepathPkgPath`, `IOEitherPkgPath`, `IOPkgPath`, `EitherPkgPath`, `OptionPkgPath`, `EndomorphismPkgPath`, `DefaultAllowDirective`, `DefaultAllowAppliedSeedDirective`, `DefaultAllowBareIfDirective`, `DefaultAllowTryCatchIfErrDirective`, `DefaultAllowHandRolledFileJoinDirective`, `DefaultAllowNonRawTryCatchDirective`, `DefaultAllowUnsafePrintfDirective`, `DefaultAllowRedundantFoldDirective`, `DefaultAllowDuplicateTerminalDirective`, `DefaultAllowRecoveryAfterTerminalDirective`, `DefaultAllowTrivialDelegateDirective`, `DefaultAllowLoopDirective`, `DefaultAllowBranchDirective`, `DefaultAllowDirectApplyDirective`, `DefaultAllowNewPipeDirective`, `DefaultAllowBoolExprDirective`, `DefaultAllowFlapDirective`, `DefaultAllowPopulatedStructDirective`, `DefaultAllowLocalPipeClosureDirective`. All rules ignore generated source. |
 
 > **Note:** package names may differ from the import path's last segment
 > (e.g. `array` → `arrutils`, `predicate/ord` → `predord`). Alias explicitly
@@ -684,6 +684,31 @@ the API call that needs a pointer. Opt out with
 `P.Or`, `P.Not`, `predord`, and `F.Flow2(getter, pred)`. The rule
 does not flag a function of two or more parameters. Opt out with
 `// fp-go:allow-bool-expr <reason>`.
+
+#### Flap rule
+
+`RequireNoFlap` flags each use of `Flap` or `MonadFlap` from any fp-go
+v2 package, and each use of `function.Flip`. The rule flags a call and
+a function value, such as `F.Flip(A.Flap[string, T])`. These
+combinators hide a plain call `f(x)` or a plain argument order. Write a
+named function that calls `f(x)` or takes its arguments in the order
+that you need.
+
+```go
+// Flagged: rows rendered through a flipped Flap.
+A.Map(F.Pipe2(cols, A.Map(PR.Tail), F.Flip(A.Flap[string, T])))
+
+// Clean: one named function per row type.
+func recordFields(r Record) []string {
+	return []string{recordL.StrainID.Get(r), recordL.Note.Get(r)}
+}
+```
+
+A `Flap` is allowed when an enclosing call also takes a step from
+`github.com/IBM/fp-go/v2/endomorphism`, as in
+`F.Pipe2(edits, A.Flap[En.Endomorphism[T]](x), En.Reduce[T])`.
+`endoutils.BuildFrom` already hides that pattern, so use it first.
+Opt out with `// fp-go:allow-flap <reason>`.
 
 #### Populated-struct rule
 
