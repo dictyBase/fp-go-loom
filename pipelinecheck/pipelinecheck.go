@@ -354,6 +354,9 @@ type Config struct {
 	// bool-expression rule. Defaults to
 	// DefaultAllowBoolExprDirective when empty.
 	AllowBoolExprDirective string
+	// AllowFlapDirective exempts a function from the flap rule.
+	// Defaults to DefaultAllowFlapDirective when empty.
+	AllowFlapDirective string
 
 	// AllowPopulatedStructDirective exempts a function from the
 	// populated-struct-literal rule (used by
@@ -851,6 +854,8 @@ func withDefaults(cfg Config) Config {
 		DefaultAllowNewPipeDirective)
 	applyDefault(&cfg.AllowBoolExprDirective,
 		DefaultAllowBoolExprDirective)
+	applyDefault(&cfg.AllowFlapDirective,
+		DefaultAllowFlapDirective)
 	applyDefault(&cfg.AllowPopulatedStructDirective,
 		DefaultAllowPopulatedStructDirective)
 	applyDefault(&cfg.AllowLocalPipeClosureDirective,
